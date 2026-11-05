@@ -2456,8 +2456,7 @@ const GOV = { lvl: Math.max(0, (store.get('tl3-gov') || 0) - 1), acc: 0, n: 0, l
 function applyGov(){
   renderer.shadowMap.autoUpdate = GOV.lvl < 1; renderer.shadowMap.needsUpdate = true;
   if (typeof grass !== 'undefined' && grass.userData.full === undefined) grass.userData.full = grass.count;
-  if (typeof grass !== 'undefined'){ const k = GOV.lvl >= 3 ? .45 : 1; let tiles = null; try { tiles = PERF.batches.find(b => !b.dead && b.split && b.parts[0].o === grass); } catch(_) {}
-    if (tiles) for (const im of tiles.meshes) im.count = Math.max(1, Math.floor(im.userData.full*k)); else grass.count = Math.floor(grass.userData.full*k); }
+  if (typeof grass !== 'undefined') grass.count = GOV.lvl >= 3 ? Math.floor(grass.userData.full*.45) : grass.userData.full;
   applyQuality();
 }
 function govFrame(){ const now = performance.now(), ft = now - GOV.last; GOV.last = now;
@@ -5268,7 +5267,7 @@ $('loginGo').addEventListener('click', async () => {
 });
 $('previewHost').addEventListener('click', () => { live.isHost = true; live.previewHost = true; live.state.hostPid = myId; refreshBoss(); if (me){ me.setTarget(HS.x - 3, HS.z, true); me.sitAt(HOST_SEAT); } renderLive(); toast('미리보기', ' 방장 화면이에요. 서버 없이 이 화면에서만 동작해요.'); });
 setInterval(() => { if (live.inHall && live.state.open && live.state.mode === 'cards' && live.state.cards.phase === 'open'){ renderLive(); } }, 500);
-if (window.__TL_TEST) window.__tl = { get PERF(){ return PERF; }, get LP(){ return LP; }, focus(x, y, z){ camFocus.set(x, y, z); LP.t = -9; lightPoolFrame(0, 1); }, get LITE(){ return [LITE, LITE_TEX_MB]; }, perfUnmerge, perfCull, renderer, camera, composer, GOV, applyGov, get Q(){ return Q; }, people, AU, SEATS, cafeTables, setTreeStyle, takeItem, gotItem, enterHall, leaveHall, openLiveBok, live, net, hostNext, makeAvatar, scene, get me(){ return me; }, cam(d, p, y){ camDist = d; camPitch = p; if (y !== undefined) camYaw = y; } };
+if (window.__TL_TEST) window.__tl = { get PERF(){ return PERF; }, perfUnmerge, perfCull, renderer, camera, composer, GOV, applyGov, get Q(){ return Q; }, people, AU, SEATS, cafeTables, setTreeStyle, takeItem, gotItem, enterHall, leaveHall, openLiveBok, live, net, hostNext, makeAvatar, scene, get me(){ return me; }, cam(d, p, y){ camDist = d; camPitch = p; if (y !== undefined) camYaw = y; } };
 
 await __yield();
 /* ---------------- intro ---------------- */
@@ -5292,46 +5291,6 @@ setInterval(() => { applySeason(); updateSceneText(); }, 60e3);
 const clock = new THREE.Clock();
 const v3 = new THREE.Vector3();
 let introT = 0;
-/* ---------------- phones: lighter lighting, materials, textures, shadows and reflections ----------------
-   (desktop keeps everything as it was; ?full in the address turns this off on a phone) */
-const LITE = MOBILE && !/[?&]full/.test(location.search);
-const LP = { pool: [], src: [], t: 0 };
-function lightPoolInit(N){ const src = []; scene.traverse(o => { if (o.isPointLight && !o.userData.pool) src.push(o); }); if (src.length <= N) return;
-  // the scene has ~35 lamps; every pixel used to add all of them up. Now only the N nearest lamps light the scene,
-  // carried by N fixed lights that copy their colour, strength and place (the count never changes, so nothing recompiles)
-  LP.src = src; for (const l of src){ l.userData._m0 = l.layers.mask; l.layers.mask = 1 << 31; }
-  for (let i=0;i<N;i++){ const p = new THREE.PointLight(0xffffff, 0, 1, 2); p.userData.pool = true; scene.add(p); LP.pool.push({ l: p, s: null, k: 1 }); } }
-function lightPoolFrame(t, dt){ if (!LP.pool.length) return; const W = new THREE.Vector3();
-  if (t - LP.t > .25){ LP.t = t; const sc = [];
-    for (const l of LP.src){ if (!(l.intensity > 0) || !perfChain(l)) continue; l.getWorldPosition(W); const d = W.distanceTo(camFocus), R = (l.distance > 0 ? l.distance : 40) + 20; if (d > R) continue; sc.push([l.intensity*(1 - d/R)*(1 - d/R), l]); }
-    sc.sort((a, b) => b[0] - a[0]); const want = sc.slice(0, LP.pool.length).map(x => x[1]);
-    for (const p of LP.pool) if (p.s && !want.includes(p.s)) p.s = null;   // keep lights that stay in place in their slot (no flicker)
-    for (const l of want) if (!LP.pool.some(p => p.s === l)){ const f = LP.pool.find(p => !p.s); if (f){ f.s = l; f.k = 0; } } }
-  for (const p of LP.pool){ const s = p.s, l = p.l; if (!s){ l.intensity = 0; continue; } p.k = Math.min(1, p.k + dt*2.5); s.getWorldPosition(l.position); l.color.copy(s.color); l.intensity = s.intensity*p.k; l.distance = s.distance; l.decay = s.decay; } }
-const TEX_NU = Object.getOwnPropertyDescriptor(THREE.Texture.prototype, 'needsUpdate').set;
-function capTextures(maxDim){ const seen = new Map();
-  const add = t => { if (!t || !t.isTexture || t.isRenderTargetTexture || t.isDataTexture || t.isCubeTexture || t.isVideoTexture || t.isCompressedTexture) return; let L = seen.get(t.source); if (!L) seen.set(t.source, L = new Set()); L.add(t); };
-  scene.traverse(o => { const ms = o.material ? (Array.isArray(o.material) ? o.material : [o.material]) : []; for (const m of ms){ for (const k in m){ const v = m[k]; if (v && v.isTexture) add(v); } if (m.uniforms) for (const k in m.uniforms){ const v = m.uniforms[k] && m.uniforms[k].value; if (v && v.isTexture) add(v); } } });
-  let saved = 0;
-  for (const [src, set] of seen){ const im = src.data; if (!im) continue;
-    const isC = im instanceof HTMLCanvasElement, isI = im instanceof HTMLImageElement; if (!isC && !(isI && im.complete && im.naturalWidth > 0)) continue;   // never copy a picture that hasn't arrived (that is what turned things black before)
-    const w = isI ? im.naturalWidth : im.width, h = isI ? im.naturalHeight : im.height, k = maxDim/Math.max(w, h); if (!(k < 1)) continue;
-    const c = document.createElement('canvas'); c.width = Math.max(1, Math.round(w*k)); c.height = Math.max(1, Math.round(h*k)); const g = c.getContext('2d'); if (!g) continue; g.imageSmoothingQuality = 'high'; g.drawImage(im, 0, 0, c.width, c.height);
-    src.data = c; src.needsUpdate = true; saved += (w*h - c.width*c.height)*4*1.33;
-    // if the game redraws this picture later (signs, cards), switch back to the full original so nothing goes stale
-    for (const t of set) Object.defineProperty(t, 'needsUpdate', { configurable: true, set(v){ if (v && this.source.data === c) this.source.data = im; TEX_NU.call(this, v); } }); }
-  return Math.round(saved/1e6); }
-function liteInit(){ if (!LITE) return;
-  try { lightPoolInit(8); } catch(e) { console.warn('lights', e); }
-  try { const mats = new Set(); scene.traverse(o => { const ms = o.material ? (Array.isArray(o.material) ? o.material : [o.material]) : []; ms.forEach(m => mats.add(m)); });
-    for (const m of mats) if (m.isMeshPhysicalMaterial){ if (m.clearcoat) m.clearcoat = 0; if (m.sheen) m.sheen = 0; if (m.iridescence) m.iridescence = 0; } } catch(e) {}
-  try { LITE_TEX_MB = capTextures(1024); } catch(e) { console.warn('tex', e); }
-  try { Object.assign(sun.shadow.camera, { left: -30, right: 30, top: 30, bottom: -30 }); sun.shadow.camera.updateProjectionMatrix(); } catch(e) {}
-  for (const r of [mirror, pondMirror]){ const ob = r.onBeforeRender; let n = 0; r.onBeforeRender = function(...a){ if ((n++ % 3) === 0) ob.apply(this, a); }; }   // reflections refresh every 3rd frame
-  { const bs = bloom.setSize.bind(bloom); bloom.setSize = (w, h) => bs(Math.max(1, Math.round(w/2)), Math.max(1, Math.round(h/2))); resize(); }   // glow drawn at half size
-  for (const im of [grass, flowers, babys, maples]) im.userData.cullFar = 75;   // grass and flowers fade out past 75 m (fog covers it)
-}
-let LITE_TEX_MB = 0;
 /* ---------------- performance: draw small fixed parts together, skip what is too far away to see ----------------
    merged batches watch their original parts: if code ever moves, hides or re-materials one, that batch is undone */
 const PERF = { rs: {}, why: {}, on: !/[?&]noperf/.test(location.search), batches: [], units: [], vt: 0, ct: 0, built: false, mergedVerts: 0 };
@@ -5355,7 +5314,7 @@ function perfPlan(){
     if (Object.values(g.attributes).some(a => a.isInterleavedBufferAttribute || a.isInstancedBufferAttribute)){ PERF.rs.d=(PERF.rs.d||0)+1; return; }
     if (!perfChain(o) || o.matrixWorld.determinant() <= 0){ PERF.rs[perfChain(o)?'det':'vis']=(PERF.rs[perfChain(o)?'det':'vis']||0)+1; return; }
     if (o.isInstancedMesh){ // spread-out instanced sets (grass, caps…) are cut into neighbourhood tiles so far tiles can be skipped
-      if (o.count < 150 || (m.onBeforeCompile !== protoOBC && m.onBeforeCompile.toString().includes('gl_InstanceID'))) return;
+      if (o.count < 150 || m.onBeforeCompile !== protoOBC) return;
       if (!o.boundingSphere) o.computeBoundingSphere(); if (o.boundingSphere.radius < 50) return;
       Q2.push({ kind: 'split', o }); return; }
     if (m.transparent || m.side === THREE.BackSide){ PERF.rs.tr=(PERF.rs.tr||0)+1; return; }
@@ -5384,7 +5343,7 @@ function perfDoSplit(o){
   const meshes = [], col = new THREE.Color();
   for (const L of cells.values()){ const im = new THREE.InstancedMesh(o.geometry, o.material, L.length);
     L.forEach((i, j) => { o.getMatrixAt(i, M); im.setMatrixAt(j, M); if (o.instanceColor){ o.getColorAt(i, col); im.setColorAt(j, col); } });
-    im.matrixAutoUpdate = false; im.matrix.copy(o.matrixWorld); im.matrixWorld.copy(o.matrixWorld); im.castShadow = o.castShadow; im.receiveShadow = o.receiveShadow; im.frustumCulled = true; im.raycast = () => {}; im.userData.perfBatch = true; im.userData.cullFar = o.userData.cullFar; im.userData.full = L.length; im.computeBoundingSphere(); im.boundingSphere.radius += 1.5; scene.add(im); meshes.push(im); perfUnitFor(im); }
+    im.matrixAutoUpdate = false; im.matrix.copy(o.matrixWorld); im.matrixWorld.copy(o.matrixWorld); im.castShadow = o.castShadow; im.receiveShadow = o.receiveShadow; im.frustumCulled = true; im.raycast = () => {}; im.userData.perfBatch = true; im.computeBoundingSphere(); im.boundingSphere.radius += 1.5; scene.add(im); meshes.push(im); perfUnitFor(im); }
   const b = { meshes, split: true, parts: [{ o, mat: o.material, geo: o.geometry, mw: o.matrixWorld.elements.slice(), cnt: n, mv: o.instanceMatrix.version, cv: o.instanceColor ? o.instanceColor.version : -1 }] };
   o.userData._mh = true; perfHid(o); PERF.batches.push(b);
 }
@@ -5413,7 +5372,7 @@ function perfSphere(o, box){ const v = new THREE.Vector3(), e = o.matrixWorld; l
   const c = sp.center.clone().applyMatrix4(e), r = sp.radius*new THREE.Vector3().setFromMatrixScale(e).toArray().reduce((a, b) => Math.max(a, Math.abs(b)), 0);
   box.expandByPoint(c.clone().addScalar(r)); box.expandByPoint(c.clone().addScalar(-r)); return true; }
 const isDraw = o => o.isMesh || o.isPoints || o.isLine || o.isSprite;
-function perfUnitFor(o){ const box = new THREE.Box3(); if (!perfSphere(o, box) || box.isEmpty()) return; const sph = box.getBoundingSphere(new THREE.Sphere()); if (sph.radius > 400) return; PERF.units.push({ node: o, list: [o], far: o.userData.cullFar, r: sph.radius, lc: sph.center.clone().applyMatrix4(new THREE.Matrix4().copy(o.matrixWorld).invert()), hid: false }); }
+function perfUnitFor(o){ const box = new THREE.Box3(); if (!perfSphere(o, box) || box.isEmpty()) return; const sph = box.getBoundingSphere(new THREE.Sphere()); if (sph.radius > 400) return; PERF.units.push({ node: o, list: [o], r: sph.radius, lc: sph.center.clone().applyMatrix4(new THREE.Matrix4().copy(o.matrixWorld).invert()), hid: false }); }
 function perfUnits(){
   const persons = new Set([...people.values()].map(p => p.mesh)), inv = new THREE.Matrix4();
   const sub = node => { const box = new THREE.Box3(), list = []; node.traverse(o => { if (isDraw(o) && !o.userData._mh){ if (perfSphere(o, box)) list.push(o); } }); return { box, list }; };
@@ -5429,7 +5388,7 @@ function perfUnits(){
 function perfCull(){ const cp = camera.position, far = (scene.fog ? scene.fog.far : 400) + 8, W = new THREE.Vector3();
   for (const u of PERF.units){ if (u.dead) continue;
     W.copy(u.lc).applyMatrix4(u.node.matrixWorld); const d = W.distanceTo(cp) - u.r, pad = u.hid ? -6 : 0;
-    const lim = u.far ? u.far + u.r : u.r < .6 ? 95 : u.r < 2 ? 150 : u.r < 5 ? 205 : 1e9;
+    const lim = u.r < .6 ? 95 : u.r < 2 ? 150 : u.r < 5 ? 205 : 1e9;
     const hide = d + pad > far || d + pad > lim;
     if (hide !== u.hid){ u.hid = hide; for (const o of u.list){ o.userData._ch = hide; perfHid(o); } } } }
 function perfInit(){ if (!PERF.on || PERF.built) return; PERF.built = true; const t0 = performance.now(); ray.layers.enableAll();
@@ -5459,7 +5418,7 @@ function frame(){
   camera.lookAt(camFocus);
 
   updateWorld(dt, t, camFocus); auroraStepU.time.value = t; TWINKLE.uT.value = t; { const hs = scene.userData.hallSpace; if (scene.userData.clouds3d) scene.userData.clouds3d.visible = !live.inHall; if (hs){ hs.cyl.visible = hs.stars2.visible = hs.cyl.userData.cap.visible = !!live.inHall; } if (hs && live.inHall){ hs.skyM.uniforms.uT.value = t; hs.cyl.rotation.y = t*.0035; hs.cyl.userData.cap.rotation.y = t*.0035; hs.stars2.material.uniforms.uT.value = t; hs.stars2.rotation.y = -t*.006; } } { const g = treeCharm.groups[treeStyle]; if (g) for (const o of g.children) if (o.userData.spin) o.rotation.y = t*o.userData.spin; } if (me) cafe.tick(me.mesh.position, t);
-  updatePrecip(dt, t, camFocus); perfFrame(t); lightPoolFrame(t, dt);
+  updatePrecip(dt, t, camFocus); perfFrame(t);
   if (!window.__tlNoRender){ if (Q.bloom) composer.render(dt); else renderer.render(scene, camera); }
 
   if (t - (window.__lodT || 0) > .5){ window.__lodT = t; const others = [...people.values()].filter(p => !p.isMe);
@@ -5478,7 +5437,6 @@ function frame(){
   }
   requestAnimationFrame(frame);
 }
-liteInit();
 requestAnimationFrame(frame);
 (async () => { await new Promise(r => setTimeout(r, 50));
   perfInit();
