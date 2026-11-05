@@ -446,8 +446,8 @@ const CONFIG = {
   BANK_NAME: "카카오뱅크",
   BANK_ACCOUNT: "3333192480567",
   BANK_HOLDER: "전예진",
-  ROOMS: 2,         // 라운지 방 개수
-  CAP: 100,         // 방 하나 최대 인원
+  ROOMS: 4,         // 라운지 방 개수
+  CAP: 50,          // 방 하나 최대 인원
   HALL_CAP: 100,    // 라이브 홀 최대 인원
   TOTAL_CAP: 200,   // 전체 동시 접속 한도 (Supabase 무료 플랜 200 · Pro 500으로 올리면 여기도 올리기)
   WEATHER_LAT: 37.5665,   // 서울
@@ -2012,6 +2012,44 @@ const avoid = (x, z) => inCafe(x, z, 8) || Math.hypot(x - PLAZA.x, z - PLAZA.z) 
   || Math.hypot(x - GZ.x, z - GZ.z) < 24 || Math.hypot(x - POND.x, z - POND.z) < POND.r + 6 || (Math.abs(x - PLAT.x) < 28 && z < -40 && z > PLAT.z - PLAT.r - 6)
   || (x < GZ.x + 16 && x > -14 && Math.abs(z - GZ.z) < 5);
 const NTREE = MOBILE ? 70 : 120;
+/* ---- where you can walk: the built-up areas (paths, café, station, pond, tree, gazebo, cottages, moon stairs) plus a margin;
+   the open meadow and the mushroom forest beyond stay visible but out of bounds. Walking routes around the edges automatically. */
+const WALK = (() => { const C = 2, X0 = -200, Z0 = -200, N = 200, g = new Uint8Array(N*N), M = 4;   // 2 m cells, 8 m margin
+  const base = new Uint8Array(N*N);
+  for (let j=0;j<N;j++) for (let i=0;i<N;i++){ const x = X0 + (i + .5)*C, z = Z0 + (j + .5)*C; if (Math.hypot(x, z) < WORLD_R && (avoid(x, z) || COTTAGES.some(c => Math.hypot(x - c.x, z - c.z) < 9))) base[j*N + i] = 1; }
+  // grow by the margin (square-ish distance via two passes of a small kernel)
+  for (let j=0;j<N;j++) for (let i=0;i<N;i++){ if (!base[j*N + i]) continue; for (let dj=-M;dj<=M;dj++) for (let di=-M;di<=M;di++){ if (di*di + dj*dj > M*M + 1) continue; const a = i + di, b = j + dj; if (a >= 0 && b >= 0 && a < N && b < N){ const x = X0 + (a + .5)*C, z = Z0 + (b + .5)*C; if (Math.hypot(x, z) < WORLD_R) g[b*N + a] = 1; } } }
+  // keep only the area joined to the paths (no unreachable islands)
+  const seen = new Uint8Array(N*N), q = new Int32Array(N*N); const s0 = Math.floor((0 - Z0)/C)*N + Math.floor((0 - X0)/C); let h = 0, t = 0;
+  if (g[s0]){ q[t++] = s0; seen[s0] = 1; while (h < t){ const k = q[h++], i = k % N, j = (k - i)/N; for (const [di, dj] of [[1, 0], [-1, 0], [0, 1], [0, -1]]){ const a = i + di, b = j + dj; if (a < 0 || b < 0 || a >= N || b >= N) continue; const kk = b*N + a; if (g[kk] && !seen[kk]){ seen[kk] = 1; q[t++] = kk; } } } for (let k=0;k<N*N;k++) g[k] = seen[k]; }
+  const cell = (x, z) => { const i = Math.floor((x - X0)/C), j = Math.floor((z - Z0)/C); return (i < 0 || j < 0 || i >= N || j >= N) ? -1 : j*N + i; };
+  const ok = (x, z) => { const k = cell(x, z); return k >= 0 && g[k] === 1; };
+  const centre = k => { const i = k % N, j = (k - i)/N; return [X0 + (i + .5)*C, Z0 + (j + .5)*C]; };
+  function nearest(x, z){ if (ok(x, z)) return [x, z]; const i0 = Math.floor((x - X0)/C), j0 = Math.floor((z - Z0)/C);
+    let best = -1, bd = 1e9, stop = N; for (let r=1;r<N && r<=stop;r++){ for (let dj=-r;dj<=r;dj++) for (let di=-r;di<=r;di++){ if (Math.max(Math.abs(di), Math.abs(dj)) !== r) continue; const a = i0 + di, b = j0 + dj; if (a < 0 || b < 0 || a >= N || b >= N || !g[b*N + a]) continue; const d = di*di + dj*dj; if (d < bd){ bd = d; best = b*N + a; } } if (best >= 0 && stop === N) stop = Math.ceil(r*1.42); }
+    if (best >= 0){ const [cx, cz] = centre(best); return [cx, cz]; } return [x, z]; }
+  function clear(x0, z0, x1, z1){ const d = Math.hypot(x1 - x0, z1 - z0), n = Math.ceil(d/(C*.5)); for (let k=1;k<=n;k++){ const f = k/n; if (!ok(x0 + (x1 - x0)*f, z0 + (z1 - z0)*f)) return false; } return true; }
+  const G = new Float32Array(N*N), F = new Int32Array(N*N), stamp = new Uint32Array(N*N); let run = 0;
+  function path(x0, z0, x1, z1){ // A* on the grid, then shortcut straight runs; returns waypoints ending at the goal, or null if direct is fine
+    if (!ok(x1, z1)) [x1, z1] = nearest(x1, z1);
+    if (clear(x0, z0, x1, z1)) return [[x1, z1]];
+    let sx = x0, sz = z0; if (!ok(sx, sz)) [sx, sz] = nearest(sx, sz);
+    const s = cell(sx, sz), e = cell(x1, z1); if (s < 0 || e < 0) return [[x1, z1]];
+    run++; const ei = e % N, ej = (e - ei)/N, heur = k => { const i = k % N, j = (k - i)/N, a = Math.abs(i - ei), b = Math.abs(j - ej); return Math.max(a, b) + .414*Math.min(a, b); };
+    const heap = [], push = (k, f) => { heap.push([f, k]); let i = heap.length - 1; while (i > 0){ const p = (i - 1) >> 1; if (heap[p][0] <= heap[i][0]) break; [heap[p], heap[i]] = [heap[i], heap[p]]; i = p; } },
+      pop = () => { const top = heap[0], last = heap.pop(); if (heap.length){ heap[0] = last; let i = 0; for (;;){ const l = i*2 + 1, r = l + 1; let m = i; if (l < heap.length && heap[l][0] < heap[m][0]) m = l; if (r < heap.length && heap[r][0] < heap[m][0]) m = r; if (m === i) break; [heap[m], heap[i]] = [heap[i], heap[m]]; i = m; } } return top; };
+    stamp[s] = run; G[s] = 0; F[s] = -1; push(s, heur(s)); let found = false, it = 0;
+    while (heap.length && it++ < 30000){ const [, k] = pop(); if (k === e){ found = true; break; } const i = k % N, j = (k - i)/N;
+      for (let dj=-1;dj<=1;dj++) for (let di=-1;di<=1;di++){ if (!di && !dj) continue; const a = i + di, b = j + dj; if (a < 0 || b < 0 || a >= N || b >= N) continue; const kk = b*N + a; if (!g[kk]) continue;
+        if (di && dj && (!g[j*N + a] || !g[b*N + i])) continue;
+        const ng = G[k] + (di && dj ? 1.414 : 1); if (stamp[kk] === run && G[kk] <= ng) continue; stamp[kk] = run; G[kk] = ng; F[kk] = k; push(kk, ng + heur(kk)); } }
+    if (!found) return [[x1, z1]];
+    const pts = []; for (let k = e; k !== -1; k = F[k]) pts.push(centre(k)); pts.reverse(); pts[pts.length - 1] = [x1, z1];
+    const out = []; let cx = x0, cz = z0, i = 0;
+    while (i < pts.length){ let j = pts.length - 1; while (j > i && !clear(cx, cz, pts[j][0], pts[j][1])) j--; out.push(pts[j]); [cx, cz] = pts[j]; i = j + 1; }
+    return out; }
+  return { ok, nearest, path, g, N, C, X0, Z0 };
+})();
 const capsBy = capMats.map(m => new THREE.InstancedMesh(capGeo, m, NTREE + 40)), capN = [0, 0, 0, 0], caps = capsBy[0], trunkParts = [], mIvySpots = [], dewSpots = [];
 const charmMat = addGlow(new THREE.MeshStandardMaterial({ color: 0xffffff, emissive: 0xffe0a8, emissiveIntensity: 1.5, roughness: .2, metalness: .3 }), 1.5);
 const charmGeo = [new THREE.SphereGeometry(.16, 14, 10), (() => { const sh = new THREE.Shape(); for (let i=0;i<10;i++){ const a = Math.PI/2 + i*Math.PI/5, r = i % 2 ? .07 : .17; sh[i ? 'lineTo' : 'moveTo'](Math.cos(a)*r, Math.sin(a)*r); } sh.closePath(); const g = new THREE.ExtrudeGeometry(sh, { depth: .04, bevelEnabled: false }); g.center(); return g; })(),
@@ -3074,7 +3112,7 @@ class Person {
     labelsEl.append(this.tag, this.bub);
     if (Number.isInteger(s.seat) && SEATS[s.seat]) this.sitAt(s.seat, true);
   }
-  sitAt(i, snap){ const S = SEATS[i]; if (!S) return; this.seat = i; if (this.isMe) setTimeout(updateDessert, 0); this.target.set(S.x, 0, S.z); if (snap){ this.mesh.position.set(S.x, S.y - .2, S.z); this.mesh.rotation.y = S.ry; } }
+  sitAt(i, snap){ const S = SEATS[i]; if (!S) return; this.seat = i; this.path = null; this.wp = null; if (this.isMe) setTimeout(updateDessert, 0); this.target.set(S.x, 0, S.z); if (snap){ this.mesh.position.set(S.x, S.y - .2, S.z); this.mesh.rotation.y = S.ry; } }
   rename(nick, color){
     this.nick = cleanNick(nick); this.nameEl.textContent = this.nick;
     const c = cleanColor(color); if (c !== this.color){ this.color = c; this.rebuild(); }
@@ -3086,8 +3124,9 @@ class Person {
   setFly(f){ f = !!f && this.boss; this.fly = f; if (this.mesh.userData.staff) this.mesh.userData.staff.visible = f; }
   setTarget(x, z, snap){
     if (this.isMe && this.seat !== null) setTimeout(updateDessert, 0); this.seat = null;
-    this.target.set(clampXZ(x), 0, clampXZ(z));
+    this.target.set(clampXZ(x), 0, clampXZ(z)); this.path = null; this.wp = null;
     if (snap){ this.mesh.position.set(this.target.x, heightAt(this.target.x, this.target.z), this.target.z); }
+    else if (!this.fly && !live.inHall && !inHallXZ(this.target.x, this.target.z)){ try { const P = WALK.path(this.mesh.position.x, this.mesh.position.z, this.target.x, this.target.z); const last = P[P.length - 1]; this.target.set(last[0], 0, last[1]); if (P.length > 1){ this.path = P.slice(0, -1); this.wp = new THREE.Vector3(this.path[0][0], 0, this.path[0][1]); } } catch(_) {} }
   }
   emote(p, t){
     if (p.type === 'bow') this.anim = { t: 0, dur: 1.5 };
@@ -3146,7 +3185,9 @@ class Person {
     this.bub.textContent = ARCANA[idx][1] + ' · ' + ARCANA[idx][3]; this.bub.hidden = false;
   }
   update(dt, t){
-    const p = this.mesh.position, dx = this.target.x - p.x, dz = this.target.z - p.z, d = Math.hypot(dx, dz);
+    const p = this.mesh.position;
+    if (this.wp && Math.hypot(this.wp.x - p.x, this.wp.z - p.z) < .6){ this.path.shift(); if (this.path.length) this.wp.set(this.path[0][0], 0, this.path[0][1]); else { this.wp = null; this.path = null; } }
+    const T = this.wp || this.target, dx = T.x - p.x, dz = T.z - p.z, d = Math.hypot(dx, dz);
     if (this.seat !== null && SEATS[this.seat]){
       const S = SEATS[this.seat], k = Math.min(1, dt*8);
       p.x += (S.x - p.x)*k; p.z += (S.z - p.z)*k; p.y += (S.y - .2 - p.y)*k;
@@ -3155,12 +3196,12 @@ class Person {
     } else if (d > .05){
       const speed = d > 30 ? 14 : 6.5;
       const step = Math.min(d, speed*dt); p.x += dx/d*step; p.z += dz/d*step;
-      if (!this.fly && !live.inHall){ collide(p, this.boss ? .45 : .32); const nd = Math.hypot(this.target.x - p.x, this.target.z - p.z);
+      if (!this.fly && !live.inHall){ collide(p, this.boss ? .45 : .32); const nd = Math.hypot(T.x - p.x, T.z - p.z);
         this.stuck = nd > d - step*.25 ? (this.stuck || 0) + dt : 0;
-        if (this.stuck > .45){ this.stuck = 0; this.target.set(p.x, 0, p.z); if (this.isMe) onArrive(); } }
+        if (this.stuck > .45){ this.stuck = 0; if (this.wp){ this.path.shift(); if (this.path.length) this.wp.set(this.path[0][0], 0, this.path[0][1]); else { this.wp = null; this.path = null; } } else { this.target.set(p.x, 0, p.z); if (this.isMe) onArrive(); } } }
       const want = Math.atan2(dx, dz); let diff = want - this.mesh.rotation.y; diff = Math.atan2(Math.sin(diff), Math.cos(diff));
       this.mesh.rotation.y += diff * Math.min(1, dt*10); this.walk += dt*13;
-      if (this.isMe && d - step <= .05) onArrive();
+      if (this.isMe && !this.wp && d - step <= .05) onArrive();
     } else this.walk = 0;
     if (this.seat === null){
       const gy = heightAt(p.x, p.z); this.flyY += ((this.fly ? 1.9 : 0) - this.flyY)*Math.min(1, dt*3);
@@ -4034,6 +4075,7 @@ function tap(cx, cy){
   let { x, z } = hw.point;
   if (live.inHall){ const dx = x - HALL.x, dz = z - HALL.z, d = Math.hypot(dx, dz), m = HALL.r - 2.5; if (d > m){ x = HALL.x + dx/d*m; z = HALL.z + dz/d*m; } }
   else if (!inCafe(x, z)){ const d = Math.hypot(x, z); if (d > WORLD_R){ x *= WORLD_R/d; z *= WORLD_R/d; } }
+  if (!live.inHall && !(me && me.fly) && !WALK.ok(x, z)) [x, z] = WALK.nearest(x, z);
   pendingThrow = null; pendingSit = null; me.setTarget(x, z); marker.position.set(x, heightAt(x, z) + .07, z); marker.material.opacity = 1;
   hideHint(); net.send('move', { x: +x.toFixed(2), z: +z.toFixed(2) });
 }
@@ -5268,7 +5310,7 @@ $('loginGo').addEventListener('click', async () => {
 });
 $('previewHost').addEventListener('click', () => { live.isHost = true; live.previewHost = true; live.state.hostPid = myId; refreshBoss(); if (me){ me.setTarget(HS.x - 3, HS.z, true); me.sitAt(HOST_SEAT); } renderLive(); toast('미리보기', ' 방장 화면이에요. 서버 없이 이 화면에서만 동작해요.'); });
 setInterval(() => { if (live.inHall && live.state.open && live.state.mode === 'cards' && live.state.cards.phase === 'open'){ renderLive(); } }, 500);
-if (window.__TL_TEST) window.__tl = { get PERF(){ return PERF; }, get LP(){ return LP; }, focus(x, y, z){ camFocus.set(x, y, z); LP.t = -9; lightPoolFrame(0, 1); }, get LITE(){ return [LITE, LITE_TEX_MB]; }, perfUnmerge, perfCull, renderer, camera, composer, GOV, applyGov, get Q(){ return Q; }, people, AU, SEATS, cafeTables, setTreeStyle, takeItem, gotItem, enterHall, leaveHall, openLiveBok, live, net, hostNext, makeAvatar, scene, get me(){ return me; }, cam(d, p, y){ camDist = d; camPitch = p; if (y !== undefined) camYaw = y; } };
+if (window.__TL_TEST) window.__tl = { WALK, get PERF(){ return PERF; }, get LP(){ return LP; }, focus(x, y, z){ camFocus.set(x, y, z); LP.t = -9; lightPoolFrame(0, 1); }, get LITE(){ return [LITE, LITE_TEX_MB]; }, perfUnmerge, perfCull, renderer, camera, composer, GOV, applyGov, get Q(){ return Q; }, people, AU, SEATS, cafeTables, setTreeStyle, takeItem, gotItem, enterHall, leaveHall, openLiveBok, live, net, hostNext, makeAvatar, scene, get me(){ return me; }, cam(d, p, y){ camDist = d; camPitch = p; if (y !== undefined) camYaw = y; } };
 
 await __yield();
 /* ---------------- intro ---------------- */
