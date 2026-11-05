@@ -170,12 +170,16 @@ button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible{ou
 .err{position:fixed;inset:0;display:grid;place-items:center;padding:24px;text-align:center;color:var(--mute)}
 @media (prefers-reduced-motion:reduce){.toast{animation:none}.hint{transition:none}}
 .load-track{height:4px;border-radius:4px;background:rgba(255,255,255,.08);overflow:hidden;margin-top:-4px}.load-bar{height:100%;width:3%;background:linear-gradient(90deg,#c8a0ff,#f2cf8a);transition:width .3s}#goBtn:disabled{opacity:.75;cursor:progress}
+.hud-tl .hud-live{font-family:var(--display);font-weight:800;color:var(--gold);font-size:13.5px;max-width:42vw;overflow:hidden;text-overflow:ellipsis}
+.toasts.top{bottom:auto;top:calc(env(safe-area-inset-top,0px) + 112px)}
+.tag{position:absolute}.tag .tkt{position:absolute;left:50%;bottom:100%;transform:translate(-50%,-5px);font-style:normal;white-space:nowrap;background:#f0cf8a;color:#2a2240;border-radius:999px;padding:2px 8px;font-size:11px;font-weight:700;box-shadow:0 2px 8px rgba(0,0,0,.3)}
+@media (max-width:700px){.live-panel{width:min(230px,calc(100vw - 24px));max-height:24vh;border-radius:16px}.lp-head{padding:8px 12px;font-size:13.5px}.lp-body{padding:0 10px 10px;gap:5px}.lp-list{font-size:12.5px;gap:3px}.lp-list span{font-size:11.5px}.lp-now{font-size:12.5px}.lp-go{padding:7px;font-size:14px}.lp-body .muted{font-size:12px;margin:0}}
 </style>
 
 <canvas id="world" tabindex="0" aria-label="3D 타로 라운지. 바닥을 눌러 이동하고, 끌어서 시점을 돌릴 수 있어요."></canvas>
 <div id="labels"></div>
 
-<button class="hud-tl glass" id="hud" type="button" aria-label="방 목록 열기"><span class="dot"></span><b>밤의 타로 라운지</b><span id="hudRoom">혼자 둘러보는 중</span><span class="cnt" id="hudCnt"></span></button>
+<button class="hud-tl glass" id="hud" type="button" aria-label="방 목록 열기"><span class="dot"></span><b>밤의 타로 라운지</b><span id="hudRoom">혼자 둘러보는 중</span><span class="cnt" id="hudCnt"></span><span class="hud-live" id="hudLive" hidden></span></button>
 <div class="hud-tr">
   <button class="pill glass" id="soundBtn" type="button" aria-pressed="true"><svg viewBox="0 0 24 24"><path d="M4 9.5h3.5L12 5.5v13l-4.5-4H4z"/><path d="M15.5 9a4 4 0 0 1 0 6M18 6.5a7.5 7.5 0 0 1 0 11"/></svg><span id="soundLabel">소리 켬</span></button>
   <button class="pill glass" id="placesBtn" type="button" aria-label="장소 이동"><svg viewBox="0 0 24 24"><path d="M12 21s-6.5-5.6-6.5-11a6.5 6.5 0 0 1 13 0c0 5.4-6.5 11-6.5 11z"/><circle cx="12" cy="10" r="2.3"/></svg>장소</button>
@@ -455,13 +459,15 @@ const CONFIG = {
 /* ==================================================== */
 if (window.__TL_TEST) Object.assign(CONFIG, window.__TL_TEST);
 
+// the live-server library starts downloading right away, while the world is being built
+const SUPA_LIB = (() => { const p = import('https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/+esm'); p.catch(() => {}); return p; })();
 const $ = id => document.getElementById(id);
 // this file is built three times: index.html (정원·연못·기차역·달의 전당), cafe.html (소링 카페), hall.html (라이브 홀)
 const PAGE = 'cafe';
 // loading: build the world in slices so the page stays responsive, and show progress on the enter button
 const effects = [];
 const __load = { n: 0, total: 39 };
-const __yield = () => { __load.n++; const b = document.getElementById('goBtn'), bar = document.getElementById('loadBar'); if (bar) bar.style.width = Math.min(96, Math.round(__load.n/__load.total*100)) + '%'; if (b && !b.dataset.ready) b.querySelector('span').textContent = '준비 중 ' + Math.min(96, Math.round(__load.n/__load.total*100)) + '%'; return new Promise(r => setTimeout(r, 0)); };
+const __yield = () => { __load.n++; (__load.t || (__load.t = [])).push(performance.now()); const b = document.getElementById('goBtn'), bar = document.getElementById('loadBar'); if (bar) bar.style.width = Math.min(96, Math.round(__load.n/__load.total*100)) + '%'; if (b && !b.dataset.ready) b.querySelector('span').textContent = '준비 중 ' + Math.min(96, Math.round(__load.n/__load.total*100)) + '%'; return new Promise(r => setTimeout(r, 0)); };
 const store = { get(k){try{return JSON.parse(localStorage.getItem(k))}catch(e){return null}}, set(k,v){try{localStorage.setItem(k,JSON.stringify(v))}catch(e){}} };
 const kst = () => { const d = new Date(Date.now() + 9*3600e3); return { hour: d.getUTCHours() + d.getUTCMinutes()/60, month: d.getUTCMonth() + 1, date: d.toISOString().slice(0,10) }; };
 const today = kst().date;
@@ -632,7 +638,7 @@ function snowable(mat){
   return mat;
 }
 
-try { await Promise.race([Promise.all([document.fonts.load('800 32px "Nanum Myeongjo"'), document.fonts.load('20px "Gowun Dodum"')]), new Promise(r => setTimeout(r, 1500))]); } catch(e) {}
+try { await Promise.race([Promise.all([document.fonts.load('800 32px "Nanum Myeongjo"'), document.fonts.load('20px "Gowun Dodum"')]), new Promise(r => setTimeout(r, 600))]); } catch(e) {}
 const hallSign = (() => { // live status board in front of the moon temple door
   const c = document.createElement('canvas'); c.width = 1024; c.height = 240; const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace;
   const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: t, transparent: true, depthWrite: false, toneMapped: false })); sp.scale.set(6.4, 1.5, 1);
@@ -2110,29 +2116,6 @@ function distToPath(x, z){
   }
   return best;
 }
-// worn flagstone path texture + normal map (soft lilac-sand stone, mossy cracks)
-const COB = 512, cobH = new Float32Array(COB*COB);
-const cobColor = canvasTex(COB, (g, s) => {
-  const nz = valueNoise(256, 5), tmp = document.createElement('canvas'); tmp.width = tmp.height = 256; const tg = tmp.getContext('2d'), img = tg.createImageData(256, 256);
-  for (let i=0;i<256*256;i++){ const v = nz[i]; img.data[i*4] = 190 + v*40; img.data[i*4+1] = 172 + v*34; img.data[i*4+2] = 186 + v*40; img.data[i*4+3] = 255; }
-  tg.putImageData(img, 0, 0); g.drawImage(tmp, 0, 0, s, s);
-  const hc = document.createElement('canvas'); hc.width = hc.height = s; const hg = hc.getContext('2d'); hg.fillStyle = '#fff'; hg.fillRect(0, 0, s, s);
-  // irregular slabs: jittered grid of polygons separated by cracks
-  const N = 4, pts = [];
-  for (let y=0;y<=N;y++) for (let x=0;x<=N;x++) pts.push([x*s/N + (x % N ? rnd(-.12, .12)*s/N : 0), y*s/N + (y % N ? rnd(-.12, .12)*s/N : 0)]);
-  const P = (x, y) => pts[y*(N + 1) + x];
-  for (let y=0;y<N;y++) for (let x=0;x<N;x++){
-    const quad = [P(x, y), P(x + 1, y), P(x + 1, y + 1), P(x, y + 1)];
-    const tone = pick(['rgba(255,240,250,.12)', 'rgba(120,100,140,.12)', 'rgba(255,230,210,.1)', 'rgba(90,80,110,.1)']);
-    g.fillStyle = tone; g.beginPath(); quad.forEach((p, k) => g[k ? 'lineTo' : 'moveTo'](...p)); g.closePath(); g.fill();
-    for (const [ctx, col, w] of [[g, 'rgba(70,90,60,.75)', 7], [hg, '#000', 9]]){ ctx.strokeStyle = col; ctx.lineWidth = w; ctx.beginPath(); quad.forEach((p, k) => ctx[k ? 'lineTo' : 'moveTo'](...p)); ctx.closePath(); ctx.stroke(); }
-  }
-  g.globalAlpha = .5; for (let i=0;i<700;i++){ g.fillStyle = pick(['#5d7a44', '#6f8a4a', '#4a6a3a']); g.beginPath(); g.arc(rnd(0, s), rnd(0, s), rnd(.5, 2), 0, 7); g.fill(); } g.globalAlpha = 1;
-  for (let i=0;i<180;i++){ g.fillStyle = `rgba(255,255,255,${rnd(.1, .4)})`; g.fillRect(rnd(0, s), rnd(0, s), 1.2, 1.2); }
-  const hb = document.createElement('canvas'); hb.width = hb.height = s; const hbg = hb.getContext('2d'); hbg.filter = 'blur(3px)'; hbg.drawImage(hc, 0, 0);
-  const d = hbg.getImageData(0, 0, s, s).data; for (let i=0;i<s*s;i++) cobH[i] = d[i*4]/255*.85 + nz[(Math.floor(i/s/2)*256 + Math.floor((i % s)/2)) % (256*256)]*.15;
-});
-const cobNormal = normalFromHeight(cobH, COB, 2.4);
 const pathMats = new Map();
 const pathMatsAll = [];
 function pathMat(w, len){
@@ -2394,7 +2377,7 @@ function cardMesh(idx, scale=1){
   const b = new THREE.Mesh(cardGeo, new THREE.MeshStandardMaterial({ map: cardTex(-1), emissive: 0xffffff, emissiveMap: cardTex(-1), emissiveIntensity: .35, alphaTest: .5 }));
   b.rotation.y = Math.PI; g.add(f, b); g.scale.setScalar(scale); return g;
 }
-try { await Promise.race([Promise.all([document.fonts.load('800 32px "Nanum Myeongjo"'), document.fonts.load('20px "Gowun Dodum"')]), new Promise(r => setTimeout(r, 1500))]); } catch(e) {}
+try { await Promise.race([Promise.all([document.fonts.load('800 32px "Nanum Myeongjo"'), document.fonts.load('20px "Gowun Dodum"')]), new Promise(r => setTimeout(r, 600))]); } catch(e) {}
 const orbit = new THREE.Group(); orbit.position.y = GZ.fy + 4.2; gazebo.add(orbit);
 { const lab = labelSprite('카드 뽑기', 2.4); lab.position.set(0, GZ.fy + 2.75, 0); gazebo.add(lab); }
 [17, 0, 9, 2, 19, 6, 21, 18].forEach((idx, i) => { const c = cardMesh(idx, 1.45); const a = i/8*Math.PI*2; c.position.set(Math.sin(a)*3.4, 0, Math.cos(a)*3.4); c.rotation.y = a; c.userData.phase = i; orbit.add(c); });
@@ -3110,6 +3093,7 @@ class Person {
     scene.add(this.mesh);
     this.tag = document.createElement('div'); this.tag.className = 'tag' + (isMe ? '' : ' other');
     if (isMe){ const i = document.createElement('i'); i.textContent = '나'; this.tag.append(i); }
+    this.tkt = document.createElement('em'); this.tkt.className = 'tkt'; this.tkt.hidden = true; this.tag.append(this.tkt);
     this.nameEl = document.createElement('span'); this.nameEl.textContent = this.nick; this.tag.append(this.nameEl);
     this.bub = document.createElement('div'); this.bub.className = 'bub'; this.bub.hidden = true;
     labelsEl.append(this.tag, this.bub);
@@ -4195,11 +4179,11 @@ function addPlate(id, v, x, y, z){ removePlate(id); let g;
   else { if (!Number.isInteger(v) || !DESSERTS[v]) return; g = dessertOnPlate(v); g.scale.setScalar(2.4); }
   g.position.set(clampXZ(x), Math.min(3, Number(y) || 1.3), clampXZ(z)); scene.add(g); plates.set(id, g); if (plates.size > 80){ const k = plates.keys().next().value; removePlate(k); } }
 function removePlate(id){ const g = plates.get(id); if (g){ scene.remove(g); plates.delete(id); } }
-function toast(nick, rest){
+function toast(nick, rest, ms = 6000){
   const d = document.createElement('div'); d.className = 'toast glass';
   const b = document.createElement('b'); b.textContent = nick; d.append(b, document.createTextNode(rest));
   toastsEl.append(d); while (toastsEl.children.length > 4) toastsEl.firstChild.remove();
-  setTimeout(() => d.remove(), 6000);
+  setTimeout(() => d.remove(), ms);
 }
 function hideHint(){ const h = $('hint'); if (!h.hidden){ h.style.opacity = 0; setTimeout(() => h.hidden = true, 600); } }
 
@@ -4210,7 +4194,7 @@ const net = {
   send(event, payload){ if (this.live && this.ch) this.ch.send({ type: 'broadcast', event, payload: { id: myId, ...payload } }).catch(() => {}); },
   // presence carries only who you are (name, look) and is re-sent only when that changes;
   // where you are (position, seat, broom) travels as a light 'st' broadcast: on arrival, when someone joins, and every 15 s
-  myState(){ return { nick: profile.nick, color: profile.color }; },
+  myState(){ return { nick: profile.nick, color: profile.color, uid: myUid() }; },
   posState(){ return { x: me ? +me.target.x.toFixed(2) : spawn.x, z: me ? +me.target.z.toFixed(2) : spawn.z, seat: me && me.seat !== null ? me.seat : -1, fly: me && me.fly ? 1 : 0 }; },
   lastTracked: '', stTimer: null, lastSt: 0,
   retrack(){
@@ -4235,9 +4219,11 @@ function applySt(r, p){
 function onArrive(){ net.retrack(); if (pendingItem !== null){ const k = pendingItem; pendingItem = null; gotItem(k); return; } if (pendingSit !== null){ const i = pendingSit; pendingSit = null; me.sitAt(i); net.send('sit', { seat: i }); net.retrack(); return; } if (pendingThrow !== null){ const g = pendingThrow; pendingThrow = null; startThrow(g); } }
 
 function setHud(){
+  try { updateTickets(); } catch(_) {}
   $('hud').classList.toggle('live', net.live);
   $('hudRoom').textContent = net.live ? (net.topic === 'live-hall' ? '라이브 홀' : net.room + '번 방') : (live.inHall ? '라이브 홀' : '혼자 둘러보는 중');
   $('hudCnt').textContent = net.live ? people.size + ' / ' + (net.topic === 'live-hall' ? live.state.cap : CONFIG.CAP) : '';
+  const hl = $('hudLive'); if (hl){ const on = live.inHall && live.state.open; hl.hidden = !on; hl.textContent = on ? live.state.title : ''; }
 }
 function renderRooms(){
   const grid = $('roomsGrid'); grid.textContent = '';
@@ -4250,7 +4236,7 @@ function renderRooms(){
     b.append(t, s); b.addEventListener('click', () => { $('roomsSheet').hidden = true; if (i !== net.room) joinRoom(i); }); grid.append(b);
   }
 }
-$('hud').addEventListener('click', () => { renderRooms(); openSheet('roomsSheet'); });
+$('hud').addEventListener('click', () => { if (PAGE === 'hall'){ toast('라이브 홀', ' 은 모든 방 손님이 한곳에 모이는 곳이에요 (최대 ' + live.state.cap + '명).'); return; } renderRooms(); openSheet('roomsSheet'); });
 
 function isBossId(id){ return (id === myId && live.isHost) || (!!live.state.hostPid && id === live.state.hostPid); }
 function refreshBoss(){ for (const [id, p] of people) p.setBoss(isBossId(id));
@@ -4297,7 +4283,7 @@ function syncPeers(st){
       if (!hasPos){ np.mesh.visible = false; setTimeout(() => { if (!np.placed){ np.placed = true; np.mesh.visible = true; } }, 3500); }
       if (roomSettled) toast(cleanNick(s.nick), '님이 들어왔어요'); newcomer = true; }
     else if (cleanNick(s.nick) !== p.nick || cleanColor(s.color) !== p.color) p.rename(s.nick, s.color);
-    const pp = people.get(key); if (pp){ pp.setBoss(isBossId(key)); if (pp.boss && !!s.fly !== pp.fly) pp.setFly(!!s.fly); }
+    const pp = people.get(key); if (pp) pp.uid = cleanText(s.uid, 64); if (pp){ pp.setBoss(isBossId(key)); if (pp.boss && !!s.fly !== pp.fly) pp.setFly(!!s.fly); }
   }
   if (me && !me.boss){ // two people with the same random name: the later id picks a new one
     const others = new Set([...people.values()].filter(p => p !== me).map(p => p.nick)); const clash = [...people.entries()].some(([id, p]) => p !== me && p.nick === profile.nick && id < myId);
@@ -4307,7 +4293,7 @@ function syncPeers(st){
   if (newcomer) net.sendSt(300 + Math.random()*1500);
   setHud();
 }
-async function joinRoom(n){ net.room = n; return joinTopic('tarot-room-' + n); }
+async function joinRoom(n){ net.room = n; return joinTopic(PAGE === 'hall' ? 'live-hall' : 'tarot-room-' + n); }
 async function joinTopic(topic){
   if (net.ch){ try { await net.sb.removeChannel(net.ch); } catch(_) {} net.ch = null; }
   net.live = false; removeRemotes(); roomSettled = false; net.topic = topic; setHud();
@@ -4341,7 +4327,7 @@ async function joinTopic(topic){
 async function startNet(){
   if (!CONFIG.SUPABASE_URL || !CONFIG.SUPABASE_ANON_KEY){ setHud(); return; }
   try {
-    const { createClient } = window.__SUPA_MOCK || await import('https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/+esm');
+    const { createClient } = window.__SUPA_MOCK || await SUPA_LIB;
     net.sb = createClient(CONFIG.SUPABASE_URL, CONFIG.SUPABASE_ANON_KEY, { realtime: { params: { eventsPerSecond: 10 } } });
     // everyone signs in: visitors anonymously, the owner with their email account
     let { data: { session } } = await net.sb.auth.getSession();
@@ -4969,7 +4955,7 @@ const live = {
 const LIVE_SAVE = 'tl3-host';
 function liveDefault(){
   const saved = store.get(LIVE_SAVE) || {};
-  return { v: 0, open: false, pubVoice: !!saved.pubVoice, pubChat: !!saved.pubChat, mic: false, paid: saved.paid !== false, mode: saved.mode || 'consult', title: saved.title || '달빛 타로 라이브', notice: saved.notice || '', cap: Math.min(CONFIG.HALL_CAP, saved.cap || 100), treeStyle: Number.isInteger(saved.treeStyle) ? saved.treeStyle : 0, cafeMusic: saved.cafeMusic | 0, cafeLight: saved.cafeLight | 0,
+  return { v: 0, open: false, pubVoice: !!saved.pubVoice, pubChat: !!saved.pubChat, mic: false, paid: saved.paid !== false, mode: saved.mode || 'consult', title: (saved.title && saved.title !== '달빛 타로 라이브') ? saved.title : '소링타로 라이브', notice: saved.notice || '', cap: Math.min(CONFIG.HALL_CAP, saved.cap || 100), treeStyle: Number.isInteger(saved.treeStyle) ? saved.treeStyle : 0, cafeMusic: saved.cafeMusic | 0, cafeLight: saved.cafeLight | 0,
     types: Array.isArray(saved.types) && saved.types.length ? saved.types : [{ name: '질문 1개 리딩', price: 10000 }, { name: '연애운 3장 리딩', price: 20000 }],
     maxQueue: saved.maxQueue || 10, queue: [], seated: null, cards: { n: saved.cardsN || 6, phase: 'idle', endsAt: 0, picks: {}, results: {}, note: '' }, at: Date.now() };
 }
@@ -4983,7 +4969,7 @@ function sanitizeState(p){
   st.v = Number(p.v) || 0; st.open = !!p.open; st.pubVoice = !!p.pubVoice; st.pubChat = !!p.pubChat; st.mic = !!p.mic; st.paid = p.paid !== false; st.mode = p.mode === 'cards' ? 'cards' : 'consult'; st.title = cleanText(p.title, 40); st.notice = cleanText(p.notice, 140);
   st.hostPid = cleanText(p.hostPid, 64); st.treeStyle = Math.max(0, Math.min(3, Number(p.treeStyle) || 0)); st.cafeMusic = Math.max(0, Math.min(7, Number(p.cafeMusic) || 0)); st.cafeLight = Math.max(0, Math.min(2, Number(p.cafeLight) || 0)); st.cap = Math.max(1, Math.min(CONFIG.HALL_CAP, Number(p.cap) || 100)); st.maxQueue = Math.max(1, Math.min(100, Number(p.maxQueue) || 10)); st.at = Number(p.at) || Date.now();
   st.types = (Array.isArray(p.types) ? p.types : []).slice(0, 8).map(t => ({ name: cleanText(t && t.name, 30) || '상담', price: Math.max(0, Math.min(10000000, Number(t && t.price) || 0)) }));
-  st.queue = (Array.isArray(p.queue) ? p.queue : []).slice(0, 100).map(q => ({ id: cleanText(q && q.id, 64), nick: q && q.hid ? '' : cleanText(q && q.nick, 12) || '손님', type: Math.max(0, Number(q && q.type) || 0), status: q && q.status === 'paid' ? 'paid' : 'pending' }));
+  st.queue = (Array.isArray(p.queue) ? p.queue : []).slice(0, 100).map(q => ({ id: cleanText(q && q.id, 64), nick: q && q.hid ? '' : cleanText(q && q.nick, 12) || '손님', type: Math.max(0, Number(q && q.type) || 0), status: q && q.status === 'paid' ? 'paid' : 'pending', no: Math.max(0, Number(q && q.no) || 0) })); st.lastNo = Math.max(0, Number(p.lastNo) || 0);
   st.seated = p.seated && typeof p.seated === 'object' ? { id: cleanText(p.seated.id, 64), nick: p.seated.hid ? '' : cleanText(p.seated.nick, 12) || '손님', type: Number(p.seated.type) || 0 } : null;
   const c = p.cards || {}; st.cards = { n: Math.max(2, Math.min(30, Number(c.n) || 6)), phase: ['idle', 'open', 'closed', 'revealed'].includes(c.phase) ? c.phase : 'idle', endsAt: Number(c.endsAt) || 0, picks: {}, results: {}, note: cleanText(c.note, 200) };
   for (let i=1;i<=st.cards.n;i++){ if (c.picks && Number(c.picks[i])) st.cards.picks[i] = Number(c.picks[i]); if (c.results && c.results[i]) st.cards.results[i] = cleanText(c.results[i], 300); }
@@ -5019,7 +5005,7 @@ function hostSave(patch, persist){
   hostBroadcast(); applyState(live.state);
 }
 // paid consults: deposit names stay with the owner — everyone else gets only the order, so viewers see numbers and the count
-function publicState(){ const st = live.state; if (!st.paid) return st; return { ...st, queue: st.queue.map(q => ({ id: q.id, nick: '', hid: 1, type: q.type, status: q.status })), seated: st.seated ? { id: st.seated.id, nick: '', hid: 1, type: st.seated.type } : null }; }
+function publicState(){ const st = live.state; if (!st.paid) return st; return { ...st, queue: st.queue.map(q => ({ id: q.id, nick: '', hid: 1, type: q.type, status: q.status, no: q.no })), seated: st.seated ? { id: st.seated.id, nick: '', hid: 1, type: st.seated.type } : null }; }
 function hostBroadcast(){ if (live.isHost && live.hostCh && !live.previewHost) live.hostCh.send({ type: 'broadcast', event: 'state', payload: publicState() }).catch(() => {}); }
 function hostHandle(p){
   if (!live.isHost || !p || typeof p !== 'object') return;
@@ -5031,7 +5017,7 @@ function hostHandle(p){
     if (!st.open || st.mode !== 'consult' || st.queue.some(q => q.id === uid) || (st.seated && st.seated.id === uid)) return;
     if (st.queue.length >= st.maxQueue) return;
     const type = Math.max(0, Math.min(st.types.length - 1, Number(p.type) || 0));
-    st.queue.push({ id: uid, nick: cleanText(p.nick, 12) || '손님', type, status: st.paid ? 'pending' : 'paid' });
+    st.lastNo = (st.lastNo || 0) + 1; st.queue.push({ id: uid, nick: cleanText(p.nick, 12) || '손님', type, status: st.paid ? 'pending' : 'paid', no: st.lastNo });
     toast(cleanText(p.nick, 12) || '손님', st.paid ? `님이 '${st.types[type].name}' 복채를 넣었어요 (입금 확인 필요)` : `님이 '${st.types[type].name}' 상담을 신청했어요`); sfxChime(); hostSave();
   } else if (p.t === 'cancel'){ st.queue = st.queue.filter(q => q.id !== uid); hostSave(); }
   else if (p.t === 'pick'){
@@ -5042,12 +5028,24 @@ function hostHandle(p){
 }
 function hostConfirm(id){ const q = live.state.queue.find(q => q.id === id); if (q){ q.status = q.status === 'paid' ? 'pending' : 'paid'; hostSave(); } }
 function hostRemove(id){ live.state.queue = live.state.queue.filter(q => q.id !== id); hostSave(); }
+const inHallNow = uid => uid === myUid() || [...people.values()].some(p => p.uid === uid);
 function hostNext(){
-  const st = live.state, i = st.queue.findIndex(q => !st.paid || q.status === 'paid');
-  if (i < 0){ toast('상담', st.queue.length ? ' 입금 확인된 신청자가 없어요. 리스트에서 입금 확인을 먼저 눌러 주세요.' : ' 대기 중인 신청자가 없어요.'); return; }
-  const q = st.queue.splice(i, 1)[0]; st.seated = { id: q.id, nick: q.nick, type: q.type }; live.chat = [];
-  hostSave(); openConsult(q.id);
+  const st = live.state;
+  for (;;){
+    const i = st.queue.findIndex(q => !st.paid || q.status === 'paid');
+    if (i < 0){ toast('상담', st.queue.length ? ' 입금 확인된 신청자가 없어요. 리스트에서 입금 확인을 먼저 눌러 주세요.' : ' 대기 중인 신청자가 없어요.'); hostSave(); return; }
+    const q = st.queue[i];
+    if (net.live && net.topic === 'live-hall' && !inHallNow(q.id)){ st.queue.splice(i, 1); toast(q.nick || '손님', `님이 방에 없습니다. 다음 순서로 넘어가요.`); continue; }
+    st.queue.splice(i, 1); st.seated = { id: q.id, nick: q.nick, type: q.type }; live.chat = [];
+    if (me && live.inHall && me.seat !== HOST_SEAT){ me.setTarget(HS.x - 3.4, HS.z, true); me.sitAt(HOST_SEAT); net.send('sit', { seat: HOST_SEAT }); net.retrack(); }
+    hostSave(); openConsult(q.id); return;
+  }
 }
+// whoever leaves the hall (or the game) drops out of the list after a short grace
+setInterval(() => { if (!live.isHost || PAGE !== 'hall' || !net.live || net.topic !== 'live-hall' || !roomSettled) return; const st = live.state, now = Date.now(); let ch = false;
+  live.gone = live.gone || {};
+  for (const q of st.queue){ if (inHallNow(q.id)){ delete live.gone[q.id]; continue; } live.gone[q.id] = live.gone[q.id] || now; if (now - live.gone[q.id] > 20000){ q._drop = true; ch = true; } }
+  if (ch){ st.queue = st.queue.filter(q => !q._drop); hostSave(); } }, 5000);
 function hostEndConsult(){ live.state.seated = null; hostPubClose(); hostSave(); closeConsult(); }
 function hostStartCards(){
   const c = live.state.cards, n = Math.max(2, Math.min(30, parseInt($('hCardsN').value, 10) || c.n));
@@ -5179,7 +5177,7 @@ function hallCount(){ return net.topic === 'live-hall' ? people.size : 0; }
 async function enterHall(){
   $('hallSheet').hidden = true; if (!me) return;
   if (PAGE !== 'hall'){ goPage('hall.html'); return; }
-  live.inHall = true; live.prevRoom = net.room || 1;
+  live.inHall = true; live.prevRoom = net.room || 1; live.topUntil = Date.now() + 5000; setTimeout(() => { if (live.inHall) renderLive(); }, 5100);
   me.setTarget(HALL.x + rnd(-1, 1), HALL.z - HALL.r + 15, true); me.mesh.rotation.y = 0; camFocus.set(me.mesh.position.x, 1.2, me.mesh.position.z); camYaw = Math.PI; camPitch = .2; camDist = 9;
   if (net.sb) await joinTopic('live-hall');
   if (live.isHost && me){ me.setTarget(HS.x - 3.4, HS.z, true); me.sitAt(HOST_SEAT); camFocus.set(HS.x - 3, 1.2, HS.z - 2); camYaw = Math.PI*.8; net.send('sit', { seat: HOST_SEAT }); }
@@ -5196,6 +5194,7 @@ await __yield();
 /* ---- 복채 → 신청 ---- */
 let bokType = 0, myDepName = store.get('tl3-depname') || '';
 function openLiveBok(){
+  if (live.isHost){ toast('소링타로', ' 방장님은 상담 신청 대신 리스트에서 상담을 진행해요.'); return; }
   const st = live.state; const list = $('lbTypes'); list.textContent = '';
   if (!st.open || st.mode !== 'consult'){ $('lbMsg').textContent = st.open ? '지금은 카드 번호 고르기 방송이에요. 상담 신청은 상담 라이브에서 받아요.' : '지금은 상담 신청을 받고 있지 않아요.'; $('lbMsg').hidden = false; $('lbStep1').hidden = true; $('lbStep2').hidden = true; openSheet('liveBokSheet'); return; }
   const mine = st.queue.find(q => q.id === myUid());
@@ -5205,27 +5204,32 @@ function openLiveBok(){
   $('lbMsg').hidden = !full; $('lbMsg').textContent = full ? `선착순 ${st.maxQueue}명이 모두 찼어요. 다음 기회에 신청해 주세요.` : '';
   $('lbStep1').hidden = full; $('lbStep2').hidden = true;
   st.types.forEach((t, i) => { const b = document.createElement('button'); b.type = 'button'; const n = document.createElement('b'); n.style.fontWeight = '400'; n.textContent = t.name; const p = document.createElement('span'); p.textContent = st.paid ? won(t.price) : '무료'; b.append(n, p);
-    b.addEventListener('click', () => { bokType = i; $('lbType').textContent = t.name; $('lbAmt').textContent = st.paid ? won(t.price) : '무료'; $('lbPaidOnly').hidden = !st.paid; $('lbNickLab').textContent = st.paid ? '입금자명' : '상담 닉네임'; $('lbNick').placeholder = st.paid ? '입금하신 이름 그대로' : ''; $('lbNick').value = st.paid ? '' : $('lbNick').value; $('lbWarn').innerHTML = st.paid ? '<b>입금자명과 동일한 이름을 등록해주세요.</b><br>입금자명은 방장님에게만 보이고, 다른 분들에게는 순서 번호만 보여요.' : '<b>필독!</b> 닉네임이 상담 리스트에 공개돼요.'; $('lbGo').textContent = st.paid ? '등록' : '상담 신청하기'; $('lbNick').value = profile.nick; $('lbStep1').hidden = true; $('lbStep2').hidden = false;
+    b.addEventListener('click', () => { bokType = i; $('lbType').textContent = t.name; $('lbAmt').textContent = st.paid ? won(t.price) : '무료'; $('lbPaidOnly').hidden = !st.paid; $('lbNickLab').textContent = st.paid ? '입금자명' : '상담 닉네임'; $('lbNick').placeholder = st.paid ? '입금하신 이름 그대로' : ''; $('lbNick').value = st.paid ? '' : $('lbNick').value; $('lbWarn').innerHTML = st.paid ? '<b>입금자명과 동일한 이름을 등록해주세요.</b><br>입금자명은 방장님에게만 보이고, 다른 분들에게는 순서 번호만 보여요.' : '<b>필독!</b> 닉네임이 상담 리스트에 공개돼요.'; $('lbGo').textContent = st.paid ? '등록' : '상담 신청하기'; $('lbNick').value = st.paid ? '' : profile.nick; $('lbNick').closest('.field').hidden = !st.paid; $('lbWarn').hidden = !st.paid; if (st.paid) $('lbGo').textContent = '복채 넣기'; else $('lbGo').textContent = `'${profile.nick}'(으)로 상담 신청`; $('lbStep1').hidden = true; $('lbStep2').hidden = false;
       const has = CONFIG.BANK_ACCOUNT.trim() !== ''; $('lbBank').hidden = !has; $('lbNoBank').hidden = has; if (has){ $('lbBankName').textContent = CONFIG.BANK_NAME; $('lbAcc').textContent = CONFIG.BANK_ACCOUNT; $('lbHolder').textContent = CONFIG.BANK_HOLDER; } });
     list.append(b); });
   openSheet('liveBokSheet');
 }
 function submitLiveBok(){
-  const nick = cleanText($('lbNick').value, 12); if (!nick){ $('lbNick').focus(); return; }
+  const nick = live.state.paid ? cleanText($('lbNick').value, 12) : cleanText(profile.nick, 12); if (!nick){ $('lbNick').focus(); return; }
   $('liveBokSheet').hidden = true; const paid = live.state.paid; if (paid){ tossCoin(me, true, nearPouch(me)); net.send('emote', { type: 'bokchae', real: 1 }); }
   myDepName = nick; store.set('tl3-depname', nick); liveRequest({ t: 'apply', nick, type: bokType }); toast(paid ? '입금자명' : nick, paid ? ` '${nick}'(으)로 등록했어요. 입금이 확인되면 순서대로 앞 의자로 모실게요. 다른 분들에게는 순서 번호만 보여요.` : '님, 상담 리스트에 신청했어요. 순서가 되면 앞 의자로 모실게요.');
+  setTimeout(() => toast('필독', ' : 라이브홀에서 나가면 상담이 누락됩니다. 앉아서 대기해 주세요 (누락된 경우, 카카오 채널로 문의주세요)', 10000), 400);
 }
 await __yield();
 /* ---- rendering ---- */
 function el(tag, cls, text){ const e = document.createElement(tag); if (cls) e.className = cls; if (text !== undefined) e.textContent = text; return e; }
+function updateTickets(){ const st = live.state, on = live.inHall && st.open && st.mode === 'consult' && st.paid, by = new Map();
+  if (on) for (const q of st.queue) if (q.no) by.set(q.id, q.no);
+  for (const p of people.values()){ const uid = p.isMe ? myUid() : p.uid, n = uid && by.get(uid); p.tkt.hidden = !n; if (n) p.tkt.textContent = p.isMe ? `번호표 ${n} · 나` : `번호표 ${n}`; } }
 function renderLive(){
   const st = live.state, inH = live.inHall, host = live.isHost && inH, seatedMe = wasSeated;
-  $('liveTop').hidden = !inH; $('livePanel').hidden = !inH; $('hostPanel').hidden = !host; $('hostLogin').hidden = !(WANT_HOST && net.sb && !net.isOwner);
+  const topOn = inH && ((st.open && (!!st.notice || (st.mode === 'consult' && !!st.seated && !seatedMe && !host))) || (!st.open && Date.now() < (live.topUntil || 0)));
+  $('liveTop').hidden = !topOn; $('livePanel').hidden = !inH || (!st.open && !host); toastsEl.classList.toggle('top', inH); $('hostPanel').hidden = !host; $('hostLogin').hidden = !(WANT_HOST && net.sb && !net.isOwner);
   $('previewHost').hidden = !(inH && !net.sb && !live.isHost);
   const spect = inH && !host && !seatedMe && st.open && st.seated && (st.pubChat || st.pubVoice);
   $('chatPanel').hidden = !(inH && (seatedMe || (host && st.seated) || spect)); document.querySelector('#chatPanel .chat-in').hidden = !!spect; $('chatLog').hidden = !!spect && !st.pubChat;
   if (!inH){ return; }
-  $('ltTitle').textContent = st.open ? st.title : '라이브 홀';
+  $('ltTitle').textContent = st.open ? st.title : '라이브 홀'; $('ltTitle').hidden = st.open;
   $('ltNotice').textContent = st.open ? (st.notice || '') : '지금은 방송 중이 아니에요. 방장님이 방을 열면 여기에서 라이브가 시작돼요.'; $('ltNotice').hidden = !$('ltNotice').textContent;
   const busy = st.open && st.mode === 'consult' && st.seated && !seatedMe && !host;
   $('ltStatus').hidden = !busy; $('ltStatus').textContent = st.paid ? '현재 상담 중이에요. 상담을 원하시면 복채 넣기를 클릭하세요' : '현재 상담 중이에요. 상담을 원하시면 상담 신청을 클릭하세요';
@@ -5236,8 +5240,8 @@ function renderLive(){
     $('lpTitle').textContent = `상담 리스트 · ${st.queue.length}/${st.maxQueue}`;
     if (st.seated) body.append(el('p', 'lp-now', st.seated.id === myUid() ? `지금 상담 중 · ${st.seated.nick || myDepName || '나'}` : st.seated.nick ? `지금 상담 중 · ${st.seated.nick}` : '지금 상담 진행 중'));
     if (!st.queue.length) body.append(el('p', 'muted', st.paid ? '아직 신청자가 없어요. 복채를 넣으면 선착순으로 등록돼요.' : '아직 신청자가 없어요. 무료 상담이라 신청하면 바로 선착순 등록돼요.'));
-    const ol = el('ol', 'lp-list'); st.queue.forEach((q, i) => { const mineQ = q.id === myUid(), li = el('li', mineQ ? 'me' : ''); li.append(el('b', '', st.paid ? (mineQ ? `${i + 1}번 · ${q.nick || myDepName || '나'} (나)` : `${i + 1}번`) : q.nick), el('span', '', !st.paid || mineQ || live.isHost ? (st.types[q.type] ? st.types[q.type].name : '') : ''), el('i', q.status === 'paid' ? 'ok' : '', !st.paid ? '대기' : q.status === 'paid' ? '입금 확인' : '확인 중')); ol.append(li); }); body.append(ol);
-    const btn = el('button', 'go lp-go', st.paid ? '복채 넣기' : '상담 신청'); btn.type = 'button'; btn.addEventListener('click', openLiveBok); body.append(btn);
+    const ol = el('ol', 'lp-list'); st.queue.forEach((q, i) => { const mineQ = q.id === myUid(), li = el('li', mineQ ? 'me' : ''); li.append(el('b', '', st.paid ? (mineQ ? `${q.no || i + 1}번 · ${q.nick || myDepName || '나'} (나)` : `${q.no || i + 1}번`) : q.nick), el('span', '', !st.paid || mineQ || live.isHost ? (st.types[q.type] ? st.types[q.type].name : '') : ''), el('i', q.status === 'paid' ? 'ok' : '', !st.paid ? '대기' : q.status === 'paid' ? '입금 확인' : '확인 중')); ol.append(li); }); body.append(ol);
+    if (!live.isHost){ const btn = el('button', 'go lp-go', st.paid ? '복채 넣기' : '상담 신청'); btn.type = 'button'; btn.addEventListener('click', openLiveBok); body.append(btn); }
   } else {
     const c = st.cards; $('lpTitle').textContent = '카드 번호 고르기';
     const left = Math.max(0, Math.ceil((c.endsAt - (Date.now() + live.skew))/1000));
@@ -5265,7 +5269,7 @@ function renderHost(){
 function renderHostLists(){
   const st = live.state, ql = $('hQueue'); ql.textContent = '';
   if (st.seated) ql.append(el('p', 'lp-now', `상담 중 · ${st.seated.nick} (${st.types[st.seated.type] ? st.types[st.seated.type].name : ''})`));
-  st.queue.forEach((q, i) => { const row = el('div', 'h-q'); row.append(el('span', '', `${i + 1}. ${q.nick} · ${st.types[q.type] ? st.types[q.type].name + ' ' + won(st.types[q.type].price) : ''}`));
+  st.queue.forEach((q, i) => { const row = el('div', 'h-q'); row.append(el('span', '', `${q.no || i + 1}번 ${q.nick} · ${st.types[q.type] ? st.types[q.type].name + ' ' + won(st.types[q.type].price) : ''}`));
     const ok = el('button', q.status === 'paid' ? 'ghost small on' : 'ghost small', q.status === 'paid' ? '입금됨' : '입금 확인'); ok.type = 'button'; ok.addEventListener('click', () => hostConfirm(q.id)); ok.hidden = !st.paid;
     const rm = el('button', 'ghost small', '빼기'); rm.type = 'button'; rm.addEventListener('click', () => hostRemove(q.id)); row.append(ok, rm); ql.append(row); });
   if (!st.queue.length) ql.append(el('p', 'muted', '대기 중인 신청자가 없어요.'));
@@ -5332,7 +5336,7 @@ $('loginGo').addEventListener('click', async () => {
 });
 $('previewHost').addEventListener('click', () => { live.isHost = true; live.previewHost = true; live.state.hostPid = myId; refreshBoss(); if (me){ me.setTarget(HS.x - 3, HS.z, true); me.sitAt(HOST_SEAT); } renderLive(); toast('미리보기', ' 방장 화면이에요. 서버 없이 이 화면에서만 동작해요.'); });
 setInterval(() => { if (live.inHall && live.state.open && live.state.mode === 'cards' && live.state.cards.phase === 'open'){ renderLive(); } }, 500);
-if (window.__TL_TEST) window.__tl = { get PERF(){ return PERF; }, get LP(){ return LP; }, focus(x, y, z){ camFocus.set(x, y, z); LP.t = -9; lightPoolFrame(0, 1); }, perfCull, people, renderer, camera, composer, get Q(){ return Q; }, get PAGE(){ return PAGE; }, get PRUNED(){ return PRUNED; }, WALK, AU, SEATS, cafeTables, setTreeStyle, takeItem, gotItem, enterHall, leaveHall, openLiveBok, live, net, hostNext, makeAvatar, scene, get me(){ return me; }, cam(d, p, y){ camDist = d; camPitch = p; if (y !== undefined) camYaw = y; } };
+if (window.__TL_TEST) window.__tl = { __load, get PERF(){ return PERF; }, get LP(){ return LP; }, focus(x, y, z){ camFocus.set(x, y, z); LP.t = -9; lightPoolFrame(0, 1); }, perfCull, people, renderer, camera, composer, get Q(){ return Q; }, get PAGE(){ return PAGE; }, get PRUNED(){ return PRUNED; }, WALK, AU, SEATS, cafeTables, setTreeStyle, takeItem, gotItem, enterHall, leaveHall, openLiveBok, live, net, hostNext, makeAvatar, scene, get me(){ return me; }, cam(d, p, y){ camDist = d; camPitch = p; if (y !== undefined) camYaw = y; } };
 
 await __yield();
 /* ---------------- intro ---------------- */
