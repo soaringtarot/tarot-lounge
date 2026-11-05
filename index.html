@@ -576,8 +576,6 @@ const QUALITY = {
 const prefs = Object.assign({ season: 'auto', time: 'auto', weather: 'auto', quality: 'auto' }, store.get('tl3-scene') || {});
 const qualityName = () => prefs.quality === 'auto' ? (MOBILE ? 'medium' : 'high') : prefs.quality;
 let Q = QUALITY[qualityName()] || QUALITY.medium;
-const Q_AT_LOAD = prefs.quality;
-const LITE0 = MOBILE && !/[?&]full/.test(location.search);   // phone-light scene (lighter lights, haze, no grass blades…); resolution follows the quality setting
 const ANISO = renderer.capabilities.getMaxAnisotropy();
 
 renderer.shadowMap.enabled = true; renderer.shadowMap.type = THREE.PCFSoftShadowMap;
@@ -2492,8 +2490,7 @@ composer.addPass(grade);
 composer.addPass(new OutputPass());
 
 // automatic step-down when a device can't keep up (only ever lowers, remembered for the next visit)
-// only in '자동' quality: a picked quality (높음/보통/낮음) is always kept as chosen
-const GOV = { lvl: prefs.quality === 'auto' ? Math.max(0, (store.get('tl3-gov2') || 0) - 1) : 0, acc: 0, n: 0, last: 0, from: 0, shT: 0, downAt: -1e9 };
+const GOV = { lvl: Math.max(0, (store.get('tl3-gov') || 0) - 1), acc: 0, n: 0, last: 0, from: 0, shT: 0 };
 function applyGov(){
   renderer.shadowMap.autoUpdate = GOV.lvl < 1; renderer.shadowMap.needsUpdate = true;
   if (typeof grass !== 'undefined' && grass.userData.full === undefined) grass.userData.full = grass.count;
@@ -2504,14 +2501,13 @@ function applyGov(){
 function govFrame(){ const now = performance.now(), ft = now - GOV.last; GOV.last = now;
   if (GOV.lvl >= 1 && now - GOV.shT > 350){ GOV.shT = now; renderer.shadowMap.needsUpdate = true; }
   if (!me || document.hidden){ GOV.from = now; GOV.acc = GOV.n = 0; return; }
-  if (prefs.quality !== 'auto' || ft > 1200 || now - GOV.from < 4000) return;
+  if (ft > 1200 || now - GOV.from < 4000 || GOV.lvl >= 5) return;
   GOV.acc += ft; GOV.n++; if (GOV.acc < 2500) return;
   const avg = GOV.acc/GOV.n; GOV.acc = GOV.n = 0;
-  if (avg > 42 && GOV.lvl < 5){ GOV.lvl++; GOV.from = GOV.downAt = now; store.set('tl3-gov2', GOV.lvl); applyGov(); }
-  else if (avg < 22 && GOV.lvl > 0 && now - GOV.downAt > 60000){ GOV.lvl--; GOV.from = now; store.set('tl3-gov2', GOV.lvl); applyGov(); } }   // fast again: step back up
+  if (avg > 40){ GOV.lvl++; GOV.from = now; store.set('tl3-gov', GOV.lvl); applyGov(); } }
 function applyQuality(){
-  Q = QUALITY[qualityName()] || QUALITY.medium; if (GOV.lvl >= 2) Q = { ...Q, bloom: false };
-  const dpr = Math.min(window.devicePixelRatio || 1, Q.dpr, GOV.lvl >= 5 ? 1 : GOV.lvl >= 4 ? 1.25 : 9);   // sharpness is the last thing to go, and never below 1
+  Q = QUALITY[qualityName()] || QUALITY.medium; if (GOV.lvl >= 4) Q = { ...Q, bloom: false };
+  const dpr = Math.min(window.devicePixelRatio || 1, Q.dpr, GOV.lvl >= 5 ? .8 : GOV.lvl >= 2 ? 1 : 9);
   renderer.setPixelRatio(dpr); composer.setPixelRatio(dpr);
   sun.castShadow = Q.shadow > 0;
   if (Q.shadow && sun.shadow.mapSize.x !== Q.shadow){ sun.shadow.mapSize.set(Q.shadow, Q.shadow); if (sun.shadow.map){ sun.shadow.map.dispose(); sun.shadow.map = null; } }
@@ -2613,7 +2609,7 @@ const wx = { kind: null, temp: null, ok: false };
 let seasonTint = [1, 1, 1], snowTarget = 0;
 for (const [id, key] of [['selSeason','season'],['selTime','time'],['selWeather','weather'],['selQuality','quality']]){
   const s = $(id); s.value = prefs[key]; if (s.value !== prefs[key]){ prefs[key] = 'auto'; s.value = 'auto'; }
-  s.addEventListener('change', () => { prefs[key] = s.value; store.set('tl3-scene', prefs); if (key === 'quality'){ if (LITE && (s.value === 'high') !== (Q_AT_LOAD === 'high')){ location.reload(); return; } GOV.lvl = 0; store.set('tl3-gov2', 0); applyGov(); } applySeason(); envDue = 0; updateSceneText(); });
+  s.addEventListener('change', () => { prefs[key] = s.value; store.set('tl3-scene', prefs); if (key === 'quality') applyQuality(); applySeason(); envDue = 0; updateSceneText(); });
 }
 $('liveSync').addEventListener('click', () => {
   for (const [id, key] of [['selSeason','season'],['selTime','time'],['selWeather','weather']]){ prefs[key] = 'auto'; $(id).value = 'auto'; }
@@ -2684,13 +2680,13 @@ function updateWorld(dt, t, focus){
   u.top.value.copy(cur.top); u.hor.value.copy(cur.hor); u.bot.value.copy(cur.bot); u.band.value.copy(cur.band);
   u.bandAmt.value = cur.ba*(1 - c*.8); u.cloud.value = Math.max(cur.cv, cur.cloud); u.cloudCol.value.copy(cur.cc); u.cloudLit.value.copy(cur.cl);
   u.iri.value = cur.ir; u.neb.value = cur.nb; u.glit.value = cur.gt; u.stars.value = cur.st; u.aurora.value = cur.au; u.sunAmt.value = cur.sa; u.sunCol.value.copy(cur.sc); u.sunDir.value.lerp(tmpV, k); u.time.value = t;
-  scene.fog.color.copy(cur.fog); scene.fog.near = LITE0 ? Math.min(cur.fogNear, 55) : cur.fogNear; scene.fog.far = LITE0 ? Math.min(cur.fogFar, 150) : cur.fogFar;   // phones: the haze comes closer so far scenery isn't drawn
+  scene.fog.color.copy(cur.fog); scene.fog.near = cur.fogNear; scene.fog.far = cur.fogFar;
   hemi.color.copy(cur.hs); hemi.groundColor.copy(cur.hg); hemi.intensity = cur.hi + flash*3;
   sun.color.copy(cur.sc); sun.intensity = cur.si;
   sun.position.copy(focus).addScaledVector(u.sunDir.value, 90); sun.target.position.copy(focus);
   sunSprite.position.copy(camera.position).addScaledVector(u.sunDir.value, 600); sunSprite.material.opacity = (day ? 1 : 0)*Math.min(1, cur.sa*1.2)*(1 - c*.75); sunSprite.visible = sunSprite.material.opacity > .01;
   updateMoon(cur.mo, s.phase === 'dawn');
-  { const cu = cloudMat.uniforms; cu.lit.value.copy(cur.cl).lerp(PUFF_LIT, .35); cu.shade.value.copy(cur.cc).lerp(PUFF_SHADE, .4).multiplyScalar(.88); cu.fogColor.value.copy(scene.fog.color); cu.fogNear.value = cur.fogNear; cu.fogFar.value = cur.fogFar; }
+  { const cu = cloudMat.uniforms; cu.lit.value.copy(cur.cl).lerp(PUFF_LIT, .35); cu.shade.value.copy(cur.cc).lerp(PUFF_SHADE, .4).multiplyScalar(.88); cu.fogColor.value.copy(scene.fog.color); cu.fogNear.value = scene.fog.near; cu.fogFar.value = scene.fog.far; }
   const cg = .8 + .35*cur.gl; for (const m of capMats) m.color.setRGB(cg*seasonTint[0], cg*seasonTint[1], cg*seasonTint[2]);
   pondLight.intensity = 32*cur.gl + 6; domeLight.intensity = 34*cur.gl + 8; scene.userData.hallLight.intensity = 30*cur.gl + 6;
   for (const m of glowMats){ if (m.userData.isCurtain) m.opacity = .4*Math.min(1, cur.gl*1.1); else m.emissiveIntensity = m.userData.base*cur.gl; }
@@ -5340,7 +5336,7 @@ const v3 = new THREE.Vector3();
 let introT = 0;
 /* ---------------- phones: lighter lighting, materials, textures, shadows and reflections ----------------
    (desktop keeps everything as it was; ?full in the address turns this off on a phone) */
-const LITE = LITE0;
+const LITE = MOBILE && !/[?&]full/.test(location.search);
 const LP = { pool: [], src: [], t: 0 };
 function lightPoolInit(N){ const src = []; scene.traverse(o => { if (o.isPointLight && !o.userData.pool) src.push(o); }); if (src.length <= N) return;
   // the scene has ~35 lamps; every pixel used to add all of them up. Now only the N nearest lamps light the scene,
@@ -5371,11 +5367,11 @@ function liteInit(){ if (!LITE) return;
   try { lightPoolInit(8); } catch(e) { console.warn('lights', e); }
   try { const mats = new Set(); scene.traverse(o => { const ms = o.material ? (Array.isArray(o.material) ? o.material : [o.material]) : []; ms.forEach(m => mats.add(m)); });
     for (const m of mats) if (m.isMeshPhysicalMaterial){ if (m.clearcoat) m.clearcoat = 0; if (m.sheen) m.sheen = 0; if (m.iridescence) m.iridescence = 0; } } catch(e) {}
-  if (prefs.quality !== 'high') try { LITE_TEX_MB = capTextures(1024); } catch(e) { console.warn('tex', e); }   // 높음 keeps full-size pictures
+  try { LITE_TEX_MB = capTextures(1024); } catch(e) { console.warn('tex', e); }
   try { Object.assign(sun.shadow.camera, { left: -30, right: 30, top: 30, bottom: -30 }); sun.shadow.camera.updateProjectionMatrix(); } catch(e) {}
-  for (const r of [mirror, pondMirror]){ const ob = r.onBeforeRender; let n = 0; r.onBeforeRender = function(...a){ if ((n++ % 3) !== 0) return; perfReflect(true); try { ob.apply(this, a); } finally { perfReflect(false); } }; }   // reflections refresh every 3rd frame and leave out small/far things
+  for (const r of [mirror, pondMirror]){ const ob = r.onBeforeRender; let n = 0; r.onBeforeRender = function(...a){ if ((n++ % 3) === 0) ob.apply(this, a); }; }   // reflections refresh every 3rd frame
   { const bs = bloom.setSize.bind(bloom); bloom.setSize = (w, h) => bs(Math.max(1, Math.round(w/2)), Math.max(1, Math.round(h/2))); resize(); }   // glow drawn at half size
-  for (const im of [grass, flowers, babys, maples]){ im.userData.liteHide = true; im.layers.mask = 1 << 31; }   // phones: no 3D grass blades or flower beds (the ground keeps its grass texture)
+  for (const im of [grass, flowers, babys, maples]) im.userData.cullFar = 75;   // grass and flowers fade out past 75 m (fog covers it)
 }
 let LITE_TEX_MB = 0;
 /* ---------------- performance: draw small fixed parts together, skip what is too far away to see ----------------
@@ -5395,13 +5391,13 @@ function perfPlan(){
   scene.updateMatrixWorld(true);
   const protoOBC = THREE.Material.prototype.onBeforeCompile;
   scene.traverse(o => {
-    if (!o.isMesh || o.isSkinnedMesh || Array.isArray(o.material) || o.userData.perfBatch || o.userData.liteHide){ PERF.rs.a=(PERF.rs.a||0)+1; return; }
+    if (!o.isMesh || o.isSkinnedMesh || Array.isArray(o.material) || o.userData.perfBatch){ PERF.rs.a=(PERF.rs.a||0)+1; return; }
     const m = o.material, g = o.geometry; if (!m || !g || !g.attributes.position || o.renderOrder){ PERF.rs.b=(PERF.rs.b||0)+1; return; }
     if (o.onBeforeRender !== THREE.Object3D.prototype.onBeforeRender || o.morphTargetInfluences || Object.keys(g.morphAttributes || {}).length){ PERF.rs.c=(PERF.rs.c||0)+1; return; }
     if (Object.values(g.attributes).some(a => a.isInterleavedBufferAttribute || a.isInstancedBufferAttribute)){ PERF.rs.d=(PERF.rs.d||0)+1; return; }
     if (!perfChain(o) || o.matrixWorld.determinant() <= 0){ PERF.rs[perfChain(o)?'det':'vis']=(PERF.rs[perfChain(o)?'det':'vis']||0)+1; return; }
     if (o.isInstancedMesh){ // spread-out instanced sets (grass, caps…) are cut into neighbourhood tiles so far tiles can be skipped
-      if (o.count < 20 || (m.onBeforeCompile !== protoOBC && m.onBeforeCompile.toString().includes('gl_InstanceID'))) return;
+      if (o.count < 150 || (m.onBeforeCompile !== protoOBC && m.onBeforeCompile.toString().includes('gl_InstanceID'))) return;
       if (!o.boundingSphere) o.computeBoundingSphere(); if (o.boundingSphere.radius < 50) return;
       Q2.push({ kind: 'split', o }); return; }
     if (m.transparent || m.side === THREE.BackSide){ PERF.rs.tr=(PERF.rs.tr||0)+1; return; }
@@ -5475,12 +5471,9 @@ function perfUnits(){
 function perfCull(){ const cp = camera.position, far = (scene.fog ? scene.fog.far : 400) + 8, W = new THREE.Vector3();
   for (const u of PERF.units){ if (u.dead) continue;
     W.copy(u.lc).applyMatrix4(u.node.matrixWorld); const d = W.distanceTo(cp) - u.r, pad = u.hid ? -6 : 0;
-    const lim = u.far ? u.far + u.r : LITE0 ? (u.r < .6 ? 55 : u.r < 2 ? 85 : u.r < 5 ? 120 : 1e9) : u.r < .6 ? 95 : u.r < 2 ? 150 : u.r < 5 ? 205 : 1e9;
+    const lim = u.far ? u.far + u.r : u.r < .6 ? 95 : u.r < 2 ? 150 : u.r < 5 ? 205 : 1e9;
     const hide = d + pad > far || d + pad > lim;
     if (hide !== u.hid){ u.hid = hide; for (const o of u.list){ o.userData._ch = hide; perfHid(o); } } } }
-function perfReflect(on){ if (!PERF.built) return; const cp = camera.position, W = PERF._w || (PERF._w = new THREE.Vector3());
-  if (on){ PERF.rHid = []; for (const u of PERF.units){ if (u.dead || u.hid) continue; W.copy(u.lc).applyMatrix4(u.node.matrixWorld); const d = W.distanceTo(cp) - u.r; if (u.r < 1.5 || d > 70){ PERF.rHid.push(u); for (const o of u.list){ o.userData._ch = true; perfHid(o); } } } }
-  else if (PERF.rHid){ for (const u of PERF.rHid) for (const o of u.list){ o.userData._ch = false; perfHid(o); } PERF.rHid = null; } }
 function perfInit(){ if (!PERF.on || PERF.built) return; PERF.built = true; const t0 = performance.now(); ray.layers.enableAll();
   try { perfUnits(); } catch(e) { console.warn('units', e); PERF.units = []; }
   try { perfPlan(); } catch(e) { console.warn('plan', e); PERF.queue = null; }
