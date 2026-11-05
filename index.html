@@ -4208,14 +4208,30 @@ await __yield();
 const net = {
   live: false, room: 1, counts: {}, sb: null, lobby: null, ch: null, lastTrack: 0, trackTimer: null,
   send(event, payload){ if (this.live && this.ch) this.ch.send({ type: 'broadcast', event, payload: { id: myId, ...payload } }).catch(() => {}); },
-  myState(){ return { nick: profile.nick, color: profile.color, x: me ? +me.target.x.toFixed(2) : spawn.x, z: me ? +me.target.z.toFixed(2) : spawn.z, seat: me && me.seat !== null ? me.seat : -1, fly: me && me.fly ? 1 : 0 }; },
+  // presence carries only who you are (name, look) and is re-sent only when that changes;
+  // where you are (position, seat, broom) travels as a light 'st' broadcast: on arrival, when someone joins, and every 15 s
+  myState(){ return { nick: profile.nick, color: profile.color }; },
+  posState(){ return { x: me ? +me.target.x.toFixed(2) : spawn.x, z: me ? +me.target.z.toFixed(2) : spawn.z, seat: me && me.seat !== null ? me.seat : -1, fly: me && me.fly ? 1 : 0 }; },
+  lastTracked: '', stTimer: null, lastSt: 0,
   retrack(){
     if (!this.live || !this.ch) return;
+    this.sendSt(800);
+    const st = JSON.stringify(this.myState()); if (st === this.lastTracked) return;
     const wait = 7000 - (Date.now() - this.lastTrack);
     clearTimeout(this.trackTimer);
-    this.trackTimer = setTimeout(() => { this.lastTrack = Date.now(); this.ch.track(this.myState()).catch(() => {}); }, Math.max(0, wait));
-  }
+    this.trackTimer = setTimeout(() => { this.lastTrack = Date.now(); this.lastTracked = JSON.stringify(this.myState()); this.ch.track(this.myState()).catch(() => {}); }, Math.max(0, wait));
+  },
+  sendSt(delay = 0){ if (!this.live || !this.ch) return; clearTimeout(this.stTimer);
+    this.stTimer = setTimeout(() => { this.lastSt = Date.now(); this.send('st', this.posState()); }, Math.max(delay, 1000 - (Date.now() - this.lastSt))); }
 };
+setInterval(() => { if (net.live && !document.hidden && Date.now() - net.lastSt > 14000) net.sendSt(); }, 15000);
+function applySt(r, p){
+  if (!r || r === me || !p) return;
+  if (Number.isInteger(p.seat) && p.seat >= 0 && SEATS[p.seat]){ if (r.seat !== p.seat) r.sitAt(p.seat, !r.placed); }
+  else { const far = !r.placed || Math.hypot(clampXZ(p.x) - r.mesh.position.x, clampXZ(p.z) - r.mesh.position.z) > 40; if (r.seat !== null || far || Math.hypot(r.target.x - clampXZ(p.x), r.target.z - clampXZ(p.z)) > .3) r.setTarget(p.x, p.z, far); }
+  if (r.boss && !!p.fly !== r.fly) r.setFly(!!p.fly);
+  if (!r.placed){ r.placed = true; r.mesh.visible = true; }
+}
 function onArrive(){ net.retrack(); if (pendingItem !== null){ const k = pendingItem; pendingItem = null; gotItem(k); return; } if (pendingSit !== null){ const i = pendingSit; pendingSit = null; me.sitAt(i); net.send('sit', { seat: i }); net.retrack(); return; } if (pendingThrow !== null){ const g = pendingThrow; pendingThrow = null; startThrow(g); } }
 
 function setHud(){
@@ -4271,13 +4287,15 @@ $('flyBtn').addEventListener('click', () => { if (!me || !me.boss) return; me.se
 function removeRemotes(){ for (const [id, p] of people) if (id !== myId){ p.remove(); people.delete(id); } }
 let roomSettled = false;
 function syncPeers(st){
-  const seen = new Set();
+  const seen = new Set(); let newcomer = false;
   for (const key in st){
     if (key === myId || !Array.isArray(st[key]) || !st[key].length) continue;
     const s = { ...st[key][st[key].length - 1] }; seen.add(key);
     if (cleanNick(s.nick) === OWNER_NICK && !isBossId(key)) s.nick = '손님';
     const p = people.get(key);
-    if (!p){ people.set(key, new Person(key, s, false)); if (roomSettled) toast(cleanNick(s.nick), '님이 들어왔어요'); }
+    if (!p){ const hasPos = typeof s.x === 'number'; if (!hasPos){ s.x = spawn.x; s.z = spawn.z; } const np = new Person(key, s, false); people.set(key, np); np.placed = hasPos;
+      if (!hasPos){ np.mesh.visible = false; setTimeout(() => { if (!np.placed){ np.placed = true; np.mesh.visible = true; } }, 3500); }
+      if (roomSettled) toast(cleanNick(s.nick), '님이 들어왔어요'); newcomer = true; }
     else if (cleanNick(s.nick) !== p.nick || cleanColor(s.color) !== p.color) p.rename(s.nick, s.color);
     const pp = people.get(key); if (pp){ pp.setBoss(isBossId(key)); if (pp.boss && !!s.fly !== pp.fly) pp.setFly(!!s.fly); }
   }
@@ -4286,6 +4304,7 @@ function syncPeers(st){
     if (clash){ profile.nick = randNick(others); store.set('tl3-rnick', profile.nick); me.rename(profile.nick, profile.color); net.retrack(); }
   }
   for (const [id, p] of people) if (id !== myId && !seen.has(id)){ if (roomSettled) toast(p.nick, '님이 자리를 떠났어요'); p.remove(); people.delete(id); }
+  if (newcomer) net.sendSt(300 + Math.random()*1500);
   setHud();
 }
 async function joinRoom(n){ net.room = n; return joinTopic('tarot-room-' + n); }
@@ -4297,8 +4316,9 @@ async function joinTopic(topic){
   ch.on('broadcast', { event: 'move' }, ({ payload: p }) => {
     const r = p && people.get(p.id); if (!r || r === me) return;
     const far = Math.hypot(clampXZ(p.x) - r.mesh.position.x, clampXZ(p.z) - r.mesh.position.z) > 40;
-    r.setTarget(p.x, p.z, p.tp === 1 || far);
+    r.setTarget(p.x, p.z, p.tp === 1 || far || !r.placed); if (!r.placed){ r.placed = true; r.mesh.visible = true; }
   });
+  ch.on('broadcast', { event: 'st' }, ({ payload: p }) => applySt(p && people.get(p.id), p));
   ch.on('broadcast', { event: 'sit' }, ({ payload: p }) => { const r = p && people.get(p.id); if (r && r !== me && Number.isInteger(p.seat) && SEATS[p.seat]) r.sitAt(p.seat); });
   ch.on('broadcast', { event: 'emote' }, ({ payload: p }) => {
     const r = p && people.get(p.id); if (!r || r === me || !['bow','card','candle','uncandle','stars','wish','bokchae','fly','eat','coffee','plate','unplate','hold','holdd'].includes(p.type)) return;
@@ -4309,7 +4329,7 @@ async function joinTopic(topic){
   ch.subscribe(async status => {
     if (status === 'SUBSCRIBED'){
       net.ch = ch; net.live = true; net.lastTrack = Date.now();
-      await ch.track(net.myState()).catch(() => {});
+      net.lastTracked = JSON.stringify(net.myState()); await ch.track(net.myState()).catch(() => {}); net.sendSt(400);
       net.lobby && net.lobby.track({ room: topic.startsWith('tarot-room-') ? net.room : 0 }).catch(() => {});
       setTimeout(() => roomSettled = true, 2500); setHud();
       if (topic.startsWith('tarot-room-')) try { const u = new URL(location.href); u.searchParams.set('room', net.room); history.replaceState(null, '', u); } catch(_) {}
@@ -4364,6 +4384,7 @@ function auUnlock(){
     const a = AU.silent = new Audio(URL.createObjectURL(new Blob([buf], { type: 'audio/wav' }))); a.loop = true; a.setAttribute('playsinline', ''); a.volume = .01;
   }
   AU.silent.play().catch(() => {});
+  primeZoneAudio();
   if (AU.ctx && AU.ctx.state !== 'running') AU.ctx.resume().catch(() => {});
 }
 function auInit(){
@@ -4390,6 +4411,7 @@ function auInit(){
   AU.amb.water = loopNoise(AU.brown, 200, 1400, 1.2); AU.amb.water.g.connect(AU.zones.pond.out);
   AU.amb.wind = loopNoise(AU.brown, 80, 700); AU.amb.wind.g.connect(AU.zones.tree.out);
   AU.critter = { next: 0 }; AU.bird = { next: 0 };
+  primeZoneAudio();
   setInterval(auTick, 120);
   if (ctx.state !== 'running') ctx.resume().catch(() => {});
 }
@@ -4446,9 +4468,24 @@ const TRACKS = {};
 // café styles that play the owner's recordings instead of the generated patterns
 const CAFE_TRACKS = { 0: ['jazz1', 'music/jazz1.mp3', .6], 1: ['jazz2', 'music/jazz2.mp3', .6], 2: ['jazz3', 'music/jazz3.mp3', .6], 3: ['synth', 'music/synth.mp3', .55], 4: ['meditate', 'music/meditate.mp3', .6], 5: ['lofi', 'music/lofi.mp3', .6], 6: ['club1', 'music/club1.mp3', .55], 7: ['club2', 'music/club2.mp3', .55] };
 function trackBuf(key, src){ if (!TRACKS[key]) TRACKS[key] = Promise.resolve().then(() => { if (!src.startsWith('data:')) return fetch(src).then(r => { if (!r.ok) throw new Error('track'); return r.arrayBuffer(); }).then(b => AU.ctx.decodeAudioData(b)); const bin = atob(src.split(',')[1]), u = new Uint8Array(bin.length); for (let i=0;i<bin.length;i++) u[i] = bin.charCodeAt(i); return AU.ctx.decodeAudioData(u.buffer); }).catch(e => { delete TRACKS[key]; throw e; }); return TRACKS[key]; }
-function playTrack(z, key, src, vol){ if (z.trackKey === key) return; stopTrack(z); z.trackKey = key;
+// long recordings stream through one <audio> element per zone instead of being decoded whole:
+// a 3-minute track decoded is ~70 MB of memory, and a few of those make phones kill the page (black screen)
+function zoneAudio(z){ if (z.el !== undefined || !AU.ctx) return z.el || null; z.el = null;
+  try { const el = new Audio(); el.loop = true; el.preload = 'auto'; el.setAttribute('playsinline', ''); const n = AU.ctx.createMediaElementSource(el), g = AU.ctx.createGain(); g.gain.value = 0; n.connect(g); g.connect(z.dry); const wet = AU.ctx.createGain(); wet.gain.value = .12; g.connect(wet); wet.connect(AU.verb); z.el = el; z.elG = g; } catch(_) {}
+  return z.el; }
+function primeZoneAudio(){ if (!AU.ctx || !AU.silent || CAFE_TRACKS[0][1].startsWith('data:')) return; for (const z of Object.values(AU.zones)){ const el = zoneAudio(z); if (!el || el.dataset.primed) continue; el.dataset.primed = '1'; if (!el.src) el.src = AU.silent.src; const pr = el.play(); if (pr && pr.catch) pr.catch(() => { delete el.dataset.primed; }); setTimeout(() => { if (!z.trackKey) el.pause(); }, 60); } }
+function playTrack(z, key, src, vol){ if (z.trackKey === key) return;
+  if (!src.startsWith('data:')){ if (z.failAt && performance.now() - z.failAt < 6000) return; const el = zoneAudio(z); if (el){
+    z.trackKey = key; const tok = z.tok = (z.tok || 0) + 1, g = z.elG.gain, t = AU.ctx.currentTime, wasOn = g.value > .001; g.cancelScheduledValues(t); g.setValueAtTime(g.value, t); g.linearRampToValueAtTime(0, t + .35);
+    setTimeout(() => { if (z.tok !== tok) return; if (!el.src.endsWith(src)) el.src = src; try { el.currentTime = 0; } catch(_) {}
+      const up = () => { if (z.tok !== tok) return; const t2 = AU.ctx.currentTime; g.cancelScheduledValues(t2); g.setValueAtTime(0, t2); g.linearRampToValueAtTime(vol, t2 + 1.5); };
+      const pr = el.play(); if (pr && pr.then) pr.then(up, () => { if (z.tok === tok){ z.trackKey = null; z.failAt = performance.now(); } }); else up(); }, wasOn ? 400 : 0);
+    return; } }
+  stopTrack(z); z.trackKey = key;
   trackBuf(key, src).then(buf => { if (z.trackKey !== key || z.src) return; const s = AU.ctx.createBufferSource(); s.buffer = buf; s.loop = true; const g = AU.ctx.createGain(); g.gain.setValueAtTime(0, AU.ctx.currentTime); g.gain.linearRampToValueAtTime(vol, AU.ctx.currentTime + 1.5); s.connect(g); g.connect(z.dry); const wet = AU.ctx.createGain(); wet.gain.value = .12; g.connect(wet); wet.connect(AU.verb); s.start(); z.src = s; z.srcG = g; }).catch(() => { if (z.trackKey === key) z.trackKey = null; }); }
-function stopTrack(z){ if (!z.trackKey) return false; z.trackKey = null; if (z.src){ const s = z.src, g = z.srcG, t = AU.ctx.currentTime; g.gain.cancelScheduledValues(t); g.gain.setValueAtTime(g.gain.value, t); g.gain.linearRampToValueAtTime(0, t + 1.2); setTimeout(() => { try { s.stop(); } catch (e) {} s.disconnect(); }, 1400); z.src = null; } return true; }
+function stopTrack(z){ if (!z.trackKey) return false; z.trackKey = null;
+  if (z.el && z.elG){ const tok = z.tok = (z.tok || 0) + 1, g = z.elG.gain, t = AU.ctx.currentTime; g.cancelScheduledValues(t); g.setValueAtTime(g.value, t); g.linearRampToValueAtTime(0, t + 1.2); setTimeout(() => { if (z.tok === tok) z.el.pause(); }, 1400); }
+  if (z.src){ const s = z.src, g = z.srcG, t = AU.ctx.currentTime; g.gain.cancelScheduledValues(t); g.gain.setValueAtTime(g.gain.value, t); g.gain.linearRampToValueAtTime(0, t + 1.2); setTimeout(() => { try { s.stop(); } catch (e) {} s.disconnect(); }, 1400); z.src = null; } return true; }
 const CAFE_STYLES = [
   // 0 jazz: walking bass, brushes, ride, comping chords, vibraphone fills
   (z, s, at0) => { const beat = 60/108; z.dt = beat/2; const prog = [[53, [57, 60, 64, 67]], [50, [53, 57, 60, 64]], [55, [58, 62, 65, 69]], [48, [52, 55, 58, 62]], [57, [60, 64, 67, 71]], [50, [54, 57, 60, 64]], [55, [58, 62, 65, 68]], [48, [52, 55, 58, 63]]];
@@ -5295,7 +5332,7 @@ $('loginGo').addEventListener('click', async () => {
 });
 $('previewHost').addEventListener('click', () => { live.isHost = true; live.previewHost = true; live.state.hostPid = myId; refreshBoss(); if (me){ me.setTarget(HS.x - 3, HS.z, true); me.sitAt(HOST_SEAT); } renderLive(); toast('미리보기', ' 방장 화면이에요. 서버 없이 이 화면에서만 동작해요.'); });
 setInterval(() => { if (live.inHall && live.state.open && live.state.mode === 'cards' && live.state.cards.phase === 'open'){ renderLive(); } }, 500);
-if (window.__TL_TEST) window.__tl = { renderer, camera, composer, get Q(){ return Q; }, get PAGE(){ return PAGE; }, get PRUNED(){ return PRUNED; }, WALK, AU, SEATS, cafeTables, setTreeStyle, takeItem, gotItem, enterHall, leaveHall, openLiveBok, live, net, hostNext, makeAvatar, scene, get me(){ return me; }, cam(d, p, y){ camDist = d; camPitch = p; if (y !== undefined) camYaw = y; } };
+if (window.__TL_TEST) window.__tl = { get PERF(){ return PERF; }, get LP(){ return LP; }, focus(x, y, z){ camFocus.set(x, y, z); LP.t = -9; lightPoolFrame(0, 1); }, perfCull, people, renderer, camera, composer, get Q(){ return Q; }, get PAGE(){ return PAGE; }, get PRUNED(){ return PRUNED; }, WALK, AU, SEATS, cafeTables, setTreeStyle, takeItem, gotItem, enterHall, leaveHall, openLiveBok, live, net, hostNext, makeAvatar, scene, get me(){ return me; }, cam(d, p, y){ camDist = d; camPitch = p; if (y !== undefined) camYaw = y; } };
 
 await __yield();
 /* ---------------- intro ---------------- */
@@ -5350,6 +5387,129 @@ function prunePage(){ const rm = new Set(), W = new THREE.Vector3(), keep = new 
   return rm.size;
 }
 const PRUNED = prunePage();
+const LITE0 = false;   // phone-light scene: off in this step
+const LP = { pool: [], src: [], t: 0 };
+function lightPoolInit(N){ const src = []; scene.traverse(o => { if (o.isPointLight && !o.userData.pool) src.push(o); }); if (src.length <= N) return;
+  // the scene has ~35 lamps; every pixel used to add all of them up. Now only the N nearest lamps light the scene,
+  // carried by N fixed lights that copy their colour, strength and place (the count never changes, so nothing recompiles)
+  LP.src = src; for (const l of src){ l.userData._m0 = l.layers.mask; l.layers.mask = 1 << 31; }
+  for (let i=0;i<N;i++){ const p = new THREE.PointLight(0xffffff, 0, 1, 2); p.userData.pool = true; scene.add(p); LP.pool.push({ l: p, s: null, k: 1 }); } }
+function lightPoolFrame(t, dt){ if (!LP.pool.length) return; const W = new THREE.Vector3();
+  if (t - LP.t > .25){ LP.t = t; const sc = [];
+    for (const l of LP.src){ if (!(l.intensity > 0) || !perfChain(l)) continue; l.getWorldPosition(W); const d = W.distanceTo(camFocus), R = (l.distance > 0 ? l.distance : 40) + 20; if (d > R) continue; sc.push([l.intensity*(1 - d/R)*(1 - d/R), l]); }
+    sc.sort((a, b) => b[0] - a[0]); const want = sc.slice(0, LP.pool.length).map(x => x[1]);
+    for (const p of LP.pool) if (p.s && !want.includes(p.s)) p.s = null;   // keep lights that stay in place in their slot (no flicker)
+    for (const l of want) if (!LP.pool.some(p => p.s === l)){ const f = LP.pool.find(p => !p.s); if (f){ f.s = l; f.k = 0; } } }
+  for (const p of LP.pool){ const s = p.s, l = p.l; if (!s){ l.intensity = 0; continue; } p.k = Math.min(1, p.k + dt*2.5); s.getWorldPosition(l.position); l.color.copy(s.color); l.intensity = s.intensity*p.k; l.distance = s.distance; l.decay = s.decay; } }
+/* ---------------- performance: draw small fixed parts together, skip what is too far away to see ----------------
+   merged batches watch their original parts: if code ever moves, hides or re-materials one, that batch is undone */
+const PERF = { rs: {}, why: {}, on: !/[?&]noperf/.test(location.search), batches: [], units: [], vt: 0, ct: 0, built: false, mergedVerts: 0 };
+const L0 = 1;
+function perfHid(o){ const ud = o.userData; const hide = ud._mh || ud._ch; if (ud._m0 === undefined) ud._m0 = o.layers.mask; o.layers.mask = hide ? (ud._m0 & ~L0) | (1 << 31) : ud._m0; }
+function perfChain(o){ let q = o; for (; q && q !== scene; q = q.parent) if (!q.visible) return false; return q === scene; }
+const PROTO_OBC = THREE.Material.prototype.onBeforeCompile;
+function matSig(m){ const h = c => c ? c.getHex() : '', u = t => t ? t.uuid : '';
+  return [m.type, h(m.color), h(m.emissive), m.emissiveIntensity, m.roughness, m.metalness, m.opacity, m.transparent, m.side, m.flatShading, m.vertexColors, m.fog, m.toneMapped, m.depthWrite, m.depthTest, m.alphaTest, m.visible,
+    m.clearcoat, m.clearcoatRoughness, m.sheen, h(m.sheenColor), m.sheenRoughness, m.iridescence, m.iridescenceIOR, m.transmission, m.envMapIntensity, m.normalScale ? m.normalScale.x + ',' + m.normalScale.y : '', m.bumpScale,
+    u(m.map), u(m.normalMap), u(m.roughnessMap), u(m.metalnessMap), u(m.emissiveMap), u(m.aoMap), u(m.alphaMap), u(m.bumpMap), u(m.envMap), u(m.lightMap), u(m.clearcoatNormalMap), u(m.iridescenceMap), u(m.sheenColorMap),
+    m.onBeforeCompile === PROTO_OBC && m.customProgramCacheKey === THREE.Material.prototype.customProgramCacheKey ? '' : m.uuid, JSON.stringify(m.defines || {}), m.blending, m.polygonOffset, m.dithering].join('|'); }
+function perfPlan(){
+  const skip = new Set([...pickables, ...walkables]), groups = new Map(), P = new THREE.Vector3(), Q2 = [];
+  scene.updateMatrixWorld(true);
+  const protoOBC = THREE.Material.prototype.onBeforeCompile;
+  scene.traverse(o => {
+    if (!o.isMesh || o.isSkinnedMesh || Array.isArray(o.material) || o.userData.perfBatch || o.userData.liteHide){ PERF.rs.a=(PERF.rs.a||0)+1; return; }
+    const m = o.material, g = o.geometry; if (!m || !g || !g.attributes.position || o.renderOrder){ PERF.rs.b=(PERF.rs.b||0)+1; return; }
+    if (o.onBeforeRender !== THREE.Object3D.prototype.onBeforeRender || o.morphTargetInfluences || Object.keys(g.morphAttributes || {}).length){ PERF.rs.c=(PERF.rs.c||0)+1; return; }
+    if (Object.values(g.attributes).some(a => a.isInterleavedBufferAttribute || a.isInstancedBufferAttribute)){ PERF.rs.d=(PERF.rs.d||0)+1; return; }
+    if (!perfChain(o) || o.matrixWorld.determinant() <= 0){ PERF.rs[perfChain(o)?'det':'vis']=(PERF.rs[perfChain(o)?'det':'vis']||0)+1; return; }
+    if (o.isInstancedMesh){ // spread-out instanced sets (grass, caps…) are cut into neighbourhood tiles so far tiles can be skipped
+      if (o.count < 20 || (m.onBeforeCompile !== protoOBC && m.onBeforeCompile.toString().includes('gl_InstanceID'))) return;
+      if (!o.boundingSphere) o.computeBoundingSphere(); if (o.boundingSphere.radius < 50) return;
+      Q2.push({ kind: 'split', o }); return; }
+    if (m.transparent || m.side === THREE.BackSide){ PERF.rs.tr=(PERF.rs.tr||0)+1; return; }
+    if (g.attributes.position.count > 2500 || g.drawRange.start !== 0 || g.drawRange.count !== Infinity){ PERF.rs.big=(PERF.rs.big||0)+1; return; }
+    P.setFromMatrixPosition(o.matrixWorld);
+    const key = [matSig(m), o.castShadow ? 1 : 0, o.receiveShadow ? 1 : 0, o.frustumCulled ? 1 : 0, g.index ? 1 : 0, Object.keys(g.attributes).sort().map(k => k + g.attributes[k].itemSize).join(','), Math.floor(P.x/36), Math.floor(P.y/36), Math.floor(P.z/36)].join('|');
+    let L = groups.get(key); if (!L) groups.set(key, L = []); L.push(o); PERF.rs.ok=(PERF.rs.ok||0)+1;
+  }); PERF.rs.groups = groups.size; PERF.rs.g3 = [...groups.values()].filter(L => L.length >= 3).length;
+  for (const L of groups.values()){ if (L.length < 3) continue;
+    for (let i=0;i<L.length;){ const part = []; let v = 0; while (i < L.length && v < 120000){ part.push(L[i]); v += L[i].geometry.attributes.position.count; i++; } if (part.length >= 3) Q2.push({ kind: 'merge', part }); } }
+  PERF.queue = Q2; PERF.planned = Q2.length;
+}
+function perfDoMerge(part){
+  let geo = null; try { geo = mergeGeometries(part.map(o => { const c = new THREE.BufferGeometry(); for (const k in o.geometry.attributes) c.setAttribute(k, o.geometry.attributes[k].clone()); if (o.geometry.index) c.setIndex(o.geometry.index.clone()); c.applyMatrix4(o.matrixWorld); return c; }), false); } catch(_) { geo = null; }
+  if (!geo){ PERF.nogeo = (PERF.nogeo || 0) + 1; return; } geo.computeBoundingSphere();
+  const drop = function(){ this.array = null; }; for (const k in geo.attributes) geo.attributes[k].onUpload(drop); if (geo.index) geo.index.onUpload(drop);
+  const mm = new THREE.Mesh(geo, part[0].material); mm.castShadow = part[0].castShadow; mm.receiveShadow = part[0].receiveShadow; mm.frustumCulled = part[0].frustumCulled; mm.matrixAutoUpdate = false; mm.raycast = () => {}; mm.userData.perfBatch = true; scene.add(mm);
+  const b = { meshes: [mm], sig: matSig(part[0].material), parts: part.map(o => ({ o, mat: o.material, geo: o.geometry, mw: o.matrixWorld.elements.slice() })) };
+  for (const r of b.parts){ r.o.userData._mh = true; perfHid(r.o); }
+  PERF.batches.push(b); PERF.mergedVerts += geo.attributes.position.count; perfUnitFor(mm);
+}
+function perfDoSplit(o){
+  const n = o.count, cells = new Map(), M = new THREE.Matrix4(), W = new THREE.Matrix4(), P = new THREE.Vector3(), C = 45;
+  for (let i=0;i<n;i++){ o.getMatrixAt(i, M); W.multiplyMatrices(o.matrixWorld, M); P.setFromMatrixPosition(W); const k = Math.floor(P.x/C) + ',' + Math.floor(P.z/C); let L = cells.get(k); if (!L) cells.set(k, L = []); L.push(i); }
+  if (cells.size < 3) return;
+  const meshes = [], col = new THREE.Color();
+  for (const L of cells.values()){ const im = new THREE.InstancedMesh(o.geometry, o.material, L.length);
+    L.forEach((i, j) => { o.getMatrixAt(i, M); im.setMatrixAt(j, M); if (o.instanceColor){ o.getColorAt(i, col); im.setColorAt(j, col); } });
+    im.matrixAutoUpdate = false; im.matrix.copy(o.matrixWorld); im.matrixWorld.copy(o.matrixWorld); im.castShadow = o.castShadow; im.receiveShadow = o.receiveShadow; im.frustumCulled = true; im.raycast = () => {}; im.userData.perfBatch = true; im.userData.cullFar = o.userData.cullFar; im.userData.full = L.length; im.computeBoundingSphere(); im.boundingSphere.radius += 1.5; scene.add(im); meshes.push(im); perfUnitFor(im); }
+  const b = { meshes, split: true, parts: [{ o, mat: o.material, geo: o.geometry, mw: o.matrixWorld.elements.slice(), cnt: n, mv: o.instanceMatrix.version, cv: o.instanceColor ? o.instanceColor.version : -1 }] };
+  o.userData._mh = true; perfHid(o); PERF.batches.push(b);
+}
+function perfStep(budget){ const t0 = performance.now(); const q = PERF.queue; if (!q) return;
+  while (q.length && performance.now() - t0 < budget){ const j = q.shift(); try { if (j.kind === 'merge'){ if (j.part.every(o => !o.userData._mh && perfChain(o))) perfDoMerge(j.part); else PERF.skipJ = (PERF.skipJ || 0) + 1; } else if (!j.o.userData._mh && perfChain(j.o)) perfDoSplit(j.o); } catch(e) { PERF.err = (PERF.err || 0) + 1; PERF.lastErr = String(e).slice(0, 200); } }
+  if (!q.length){ PERF.queue = null; perfFreeGpu(); } }
+// parts that are now only drawn through a batch give their GPU copy back (it is re-sent automatically if a batch is ever undone)
+function perfFreeGpu(){ const used = new Set(); scene.traverse(o => { if (o.geometry && !o.userData._mh) used.add(o.geometry); });
+  const freed = new Set(); for (const b of PERF.batches){ if (b.dead || b.split) continue; for (const r of b.parts) if (!used.has(r.geo) && !freed.has(r.geo)){ freed.add(r.geo); r.geo.dispose(); } } PERF.freed = freed.size; }
+function perfUnmerge(b){ if (b.dead) return; b.dead = true; for (const r of b.parts){ r.o.userData._mh = false; perfHid(r.o); } for (const mm of b.meshes){ scene.remove(mm); if (!b.split) mm.geometry.dispose(); else mm.dispose && mm.dispose(); const u = PERF.units.find(u => u.node === mm); if (u) u.dead = true; } }
+function perfValidate(){ const sc = new Map(), S = m => { let v = sc.get(m); if (v === undefined) sc.set(m, v = matSig(m)); return v; };
+  for (const b of PERF.batches){ if (b.dead) continue;
+    if (b.sig !== undefined && b.parts.some(r => S(r.o.material) !== b.sig)){ PERF.why.sig = (PERF.why.sig || 0) + 1; perfUnmerge(b); continue; }
+    for (const r of b.parts){ const o = r.o; let bad = o.material !== r.mat || o.geometry !== r.geo || !perfChain(o);
+      if (!bad){ const e = o.matrixWorld.elements, w = r.mw; for (let k=0;k<16;k++) if (Math.abs(e[k] - w[k]) > 1e-4){ bad = true; break; } }
+      if (!bad && r.cnt !== undefined) bad = o.count !== r.cnt || o.instanceMatrix.version !== r.mv || (o.instanceColor ? o.instanceColor.version : -1) !== r.cv;
+      if (bad){ const why = o.material !== r.mat ? 'mat' : o.geometry !== r.geo ? 'geo' : !perfChain(o) ? 'vis' : r.cnt !== undefined ? 'inst' : 'mw'; PERF.why[why] = (PERF.why[why] || 0) + 1; perfUnmerge(b); break; } } }
+  if (PERF.batches.length > 64 && PERF.batches.some(b => b.dead)) PERF.batches = PERF.batches.filter(b => !b.dead);
+}
+// distance culling: every fixed part gets a bounding sphere; parts past the fog (or tiny and far) are skipped
+function perfSphere(o, box){ const v = new THREE.Vector3(), e = o.matrixWorld; let sp = null;
+  if (o.isInstancedMesh){ if (!o.boundingSphere) o.computeBoundingSphere(); sp = o.boundingSphere; }
+  else if (o.isSprite){ v.setFromMatrixPosition(e); const sc = new THREE.Vector3().setFromMatrixScale(e); box.expandByPoint(v.clone().addScalar(Math.max(sc.x, sc.y))); box.expandByPoint(v.clone().addScalar(-Math.max(sc.x, sc.y))); return true; }
+  else if (o.geometry){ if (!o.geometry.boundingSphere) o.geometry.computeBoundingSphere(); sp = o.geometry.boundingSphere; }
+  if (!sp || !isFinite(sp.radius)) return false;
+  const c = sp.center.clone().applyMatrix4(e), r = sp.radius*new THREE.Vector3().setFromMatrixScale(e).toArray().reduce((a, b) => Math.max(a, Math.abs(b)), 0);
+  box.expandByPoint(c.clone().addScalar(r)); box.expandByPoint(c.clone().addScalar(-r)); return true; }
+const isDraw = o => o.isMesh || o.isPoints || o.isLine || o.isSprite;
+function perfUnitFor(o){ const box = new THREE.Box3(); if (!perfSphere(o, box) || box.isEmpty()) return; const sph = box.getBoundingSphere(new THREE.Sphere()); if (sph.radius > 400) return; PERF.units.push({ node: o, list: [o], far: o.userData.cullFar, r: sph.radius, lc: sph.center.clone().applyMatrix4(new THREE.Matrix4().copy(o.matrixWorld).invert()), hid: false }); }
+function perfUnits(){
+  const persons = new Set([...people.values()].map(p => p.mesh)), inv = new THREE.Matrix4();
+  const sub = node => { const box = new THREE.Box3(), list = []; node.traverse(o => { if (isDraw(o) && !o.userData._mh){ if (perfSphere(o, box)) list.push(o); } }); return { box, list }; };
+  const add = (node, box, list) => { if (!list.length || box.isEmpty()) return; const sph = box.getBoundingSphere(new THREE.Sphere()); if (sph.radius > 400) return; inv.copy(node.matrixWorld).invert(); PERF.units.push({ node, list, r: sph.radius, lc: sph.center.clone().applyMatrix4(inv), hid: false }); };
+  const walk = node => { if (persons.has(node) || node.userData.noCull) return;
+    const { box, list } = sub(node); if (!list.length) return;
+    const r = box.getBoundingSphere(new THREE.Sphere()).radius;
+    if (r < 28 || !node.children.length){ add(node, box, list); return; }
+    if (isDraw(node) && !node.userData._mh){ const b2 = new THREE.Box3(); if (perfSphere(node, b2)) add(node, b2, [node]); }
+    for (const c of node.children) walk(c); };
+  for (const c of scene.children) walk(c);
+}
+function perfCull(){ const cp = camera.position, far = (scene.fog ? scene.fog.far : 400) + 8, W = new THREE.Vector3();
+  for (const u of PERF.units){ if (u.dead) continue;
+    W.copy(u.lc).applyMatrix4(u.node.matrixWorld); const d = W.distanceTo(cp) - u.r, pad = u.hid ? -6 : 0;
+    const lim = u.far ? u.far + u.r : LITE0 ? (u.r < .6 ? 55 : u.r < 2 ? 85 : u.r < 5 ? 120 : 1e9) : u.r < .6 ? 95 : u.r < 2 ? 150 : u.r < 5 ? 205 : 1e9;
+    const hide = d + pad > far || d + pad > lim;
+    if (hide !== u.hid){ u.hid = hide; for (const o of u.list){ o.userData._ch = hide; perfHid(o); } } } }
+function perfReflect(on){ if (!PERF.built) return; const cp = camera.position, W = PERF._w || (PERF._w = new THREE.Vector3());
+  if (on){ PERF.rHid = []; for (const u of PERF.units){ if (u.dead || u.hid) continue; W.copy(u.lc).applyMatrix4(u.node.matrixWorld); const d = W.distanceTo(cp) - u.r; if (u.r < 1.5 || d > 70){ PERF.rHid.push(u); for (const o of u.list){ o.userData._ch = true; perfHid(o); } } } }
+  else if (PERF.rHid){ for (const u of PERF.rHid) for (const o of u.list){ o.userData._ch = false; perfHid(o); } PERF.rHid = null; } }
+function perfInit(){ if (!PERF.on || PERF.built) return; PERF.built = true; const t0 = performance.now(); ray.layers.enableAll();
+  try { perfUnits(); } catch(e) { console.warn('units', e); PERF.units = []; }
+  try { perfPlan(); } catch(e) { console.warn('plan', e); PERF.queue = null; }
+  PERF.ms = Math.round(performance.now() - t0); }
+function perfFrame(t){ if (!PERF.built) return; if (PERF.queue) perfStep(MOBILE ? 6 : 10); if (t - PERF.vt > 1){ PERF.vt = t; perfValidate(); } if (t - PERF.ct > .25){ PERF.ct = t; perfCull(); } }
+if (MOBILE && !/[?&]full/.test(location.search)) try { lightPoolInit(8); } catch(e) { console.warn('lights', e); }   // phones: the 8 nearest lamps light the scene
 // walking through the café door switches page
 setInterval(() => { if (!me || leavingPage || me.fly) return; const p = me.mesh.position, d = Math.hypot(p.x - CAFE.x, p.z - CAFE.z);
   if (PAGE === 'garden' && d < CAFE.R - 2.5) goPage('cafe.html');
@@ -5381,11 +5541,11 @@ function frame(){
   camera.lookAt(camFocus);
 
   updateWorld(dt, t, camFocus); auroraStepU.time.value = t; TWINKLE.uT.value = t; { const hs = scene.userData.hallSpace; if (scene.userData.clouds3d) scene.userData.clouds3d.visible = !live.inHall; if (hs){ hs.cyl.visible = hs.stars2.visible = hs.cyl.userData.cap.visible = !!live.inHall; } if (hs && live.inHall){ hs.skyM.uniforms.uT.value = t; hs.cyl.rotation.y = t*.0035; hs.cyl.userData.cap.rotation.y = t*.0035; hs.stars2.material.uniforms.uT.value = t; hs.stars2.rotation.y = -t*.006; } } { const g = treeCharm.groups[treeStyle]; if (g) for (const o of g.children) if (o.userData.spin) o.rotation.y = t*o.userData.spin; } if (me) cafe.tick(me.mesh.position, t);
-  updatePrecip(dt, t, camFocus);
+  updatePrecip(dt, t, camFocus); perfFrame(t); lightPoolFrame(t, dt);
   if (!window.__tlNoRender){ if (Q.bloom) composer.render(dt); else renderer.render(scene, camera); }
 
   if (t - (window.__lodT || 0) > .5){ window.__lodT = t; const others = [...people.values()].filter(p => !p.isMe);
-    if (others.length > 40){ others.sort((a, b) => a.mesh.position.distanceToSquared(camFocus) - b.mesh.position.distanceToSquared(camFocus)); others.forEach((p, i) => { p.mesh.visible = i < 40 || p.boss; }); } else others.forEach(p => { p.mesh.visible = true; });
+    if (others.length > 40){ others.sort((a, b) => a.mesh.position.distanceToSquared(camFocus) - b.mesh.position.distanceToSquared(camFocus)); others.forEach((p, i) => { p.mesh.visible = p.placed !== false && (i < 40 || p.boss); }); } else others.forEach(p => { p.mesh.visible = p.placed !== false; });
     if (PAGE === 'cafe') for (const p of others) if (Math.hypot(p.mesh.position.x - CAFE.x, p.mesh.position.z - CAFE.z) > CAFE.R + 4) p.mesh.visible = false; }
   const w = innerWidth, h = innerHeight;
   for (const p of people.values()){
@@ -5403,6 +5563,7 @@ function frame(){
 }
 requestAnimationFrame(frame);
 (async () => { await new Promise(r => setTimeout(r, 50));
+  perfInit();
   const b = $('goBtn'); b.dataset.ready = '1'; b.disabled = false; b.querySelector('span').textContent = '들어가기'; const bar = $('loadBar'); if (bar){ bar.style.width = '100%'; setTimeout(() => bar.parentNode.hidden = true, 400); } })();
 </script>
 </body>
