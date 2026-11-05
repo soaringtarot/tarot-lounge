@@ -560,6 +560,8 @@ const profile = { nick: String(store.get('tl3-rnick')).slice(0, 14), color: (() 
 
 const WORLD_R = 150;
 const HALL = { x: 0, z: -700, r: 31, sz: -682 };   // live hall, floating in the sky beyond the moon stairs
+const stageClosed = () => live.inHall && live.state && live.state.open && live.state.mode === 'consult' && !live.isHost && !(live.state.seated && live.state.seated.id === myUid());
+const STAGE_R = 9.6;
 const inHallXZ = (x, z) => Math.hypot(x - HALL.x, z - HALL.z) < HALL.r + 6;
 const clampXZ = v => (typeof v === 'number' && isFinite(v)) ? Math.max(-760, Math.min(WORLD_R + 15, v)) : 0;
 const cleanNick = v => (typeof v === 'string' && v.trim()) ? v.trim().slice(0,14) : '손님';
@@ -2863,7 +2865,8 @@ function capeTexture(c){
     g.fillStyle = gold; g.fillRect(0, 0, s, 3);
   });
 }
-const coatMats = COATS.map(c => {
+const lazyList = (src, make) => new Proxy([], { get(t, k){ if (typeof k === 'string' && /^\d+$/.test(k)){ const i = +k; if (!t[i] && src[i]) t[i] = make(src[i]); return t[i]; } return Reflect.get(t, k); } });
+const coatMats = lazyList(COATS, c => {
   const paw = c.paws || c.belly || (c.points ? c.base : c.base);
   const fur = new THREE.MeshStandardMaterial({ map: furTexture(c), roughness: .88 }), face = new THREE.MeshStandardMaterial({ map: faceTexture(c), roughness: .88 });
   if (c.glow){ for (const m of [fur, face]){ m.emissive = new THREE.Color(c.glow); m.emissiveIntensity = .22; } }
@@ -2871,7 +2874,7 @@ const coatMats = COATS.map(c => {
     ear: new THREE.MeshStandardMaterial({ color: c.points || (c.patches ? c.patches[1] : c.stripe || c.base), roughness: .85 }), inner: new THREE.MeshStandardMaterial({ color: c.inner, roughness: .7 }),
     tailTip: new THREE.MeshStandardMaterial({ color: c.points || c.stripe || (c.patches ? c.patches[1] : c.base), roughness: .9 }), glow: c.glow };
 });
-const capeMats = CAPES.map(c => { const cloth = capeTexture(c);
+const capeMats = lazyList(CAPES, c => { const cloth = capeTexture(c);
   return { cloth: new THREE.MeshPhysicalMaterial({ map: cloth, roughness: .62, sheen: 1, sheenRoughness: .45, sheenColor: new THREE.Color(c.fg).lerp(new THREE.Color(0xffffff), .4), side: THREE.DoubleSide }),
     band: new THREE.MeshStandardMaterial({ color: c.band, roughness: .35, metalness: .4 }),
     robe: new THREE.MeshStandardMaterial({ color: new THREE.Color(c.bg[1]).lerp(new THREE.Color(0x1a1420), .35), roughness: .85, side: THREE.DoubleSide }),
@@ -3212,6 +3215,7 @@ class Person {
       else this.mesh.rotation.x = Math.sin(Math.PI*k)*.55;
       if (k >= 1){ this.anim = null; this.mesh.rotation.x = this.seat !== null ? -.1 : 0; }
     }
+    if (this.isMe && this.seat === null && stageClosed()){ const dx = p.x - HALL.x, dz = p.z - HALL.sz, d = Math.hypot(dx, dz); if (d < STAGE_R && d > 1e-3){ p.x = HALL.x + dx/d*STAGE_R; p.z = HALL.sz + dz/d*STAGE_R; } }
     const ud = this.mesh.userData; if (ud.star){ ud.star.rotation.y = t*1.6; }
     if (ud.mantle){ const down = this.fly || this.seat !== null; ud.mantle.ground.visible = !down; ud.mantle.flying.visible = down; }
     if (ud.staff){ ud.staff.visible = this.fly && this.seat === null; if (ud.tipGlow) ud.tipGlow.scale.setScalar(1.15 + Math.sin(t*6)*.15); }
@@ -3443,6 +3447,7 @@ const ITEMS = { coffee: { name: '커피', act: '커피 마시기', got: '커피 
   wine: { name: '무알콜 와인', act: '무알콜 와인 마시기', got: '무알콜 와인 한잔을 획득했습니다', tilt: .7 }, beer: { name: '버터크림소다', act: '버터크림소다 마시기', got: '버터크림소다 한잔을 획득했습니다', tilt: 1.0 },
   icecream: { name: '아이스크림', act: '아이스크림 먹기', lick: true }, dessert: { name: '디저트', act: '디저트 먹기', bite: true } };
 await __yield();
+SEATS.length = Math.max(SEATS.length, 300);   // café seats always start at 300
 /* ---------------- 소링 카페: a large round glass-domed hall at the end of the entrance path ---------------- */
 function wisteria(anchors, opts = {}){
   const per = opts.per || 9, n = anchors.length*per, im = new THREE.InstancedMesh(new THREE.IcosahedronGeometry(.075, 1), addGlow(new THREE.MeshStandardMaterial({ color: 0xffffff, emissive: 0x8a5ad8, emissiveIntensity: .35, roughness: .8 }), .35), n);
@@ -4088,6 +4093,7 @@ function tap(cx, cy){
   if (!hw) return;
   let { x, z } = hw.point;
   if (live.inHall){ const dx = x - HALL.x, dz = z - HALL.z, d = Math.hypot(dx, dz), m = HALL.r - 2.5; if (d > m){ x = HALL.x + dx/d*m; z = HALL.z + dz/d*m; } }
+  if (stageClosed()){ const dx = x - HALL.x, dz = z - HALL.sz, d = Math.hypot(dx, dz); if (d < STAGE_R){ const k = STAGE_R/(d || 1); x = HALL.x + (d ? dx*k : 0); z = HALL.sz + (d ? dz*k : -STAGE_R); toast('', '상담 중에는 무대에 올라갈 수 없어요.'); } }
   else if (!inCafe(x, z)){ const d = Math.hypot(x, z); if (d > WORLD_R){ x *= WORLD_R/d; z *= WORLD_R/d; } }
   if (!live.inHall && !(me && me.fly) && !WALK.ok(x, z)) [x, z] = WALK.nearest(x, z);
   pendingThrow = null; pendingSit = null; me.setTarget(x, z); marker.position.set(x, heightAt(x, z) + .07, z); marker.material.opacity = 1;
@@ -4678,6 +4684,7 @@ function updateBirds(t, vis){
 
 await __yield();
 /* ============ LIVE HALL: a glass-domed garden floating in the clouds (entered from the moon temple) ============ */
+SEATS.length = Math.max(SEATS.length, 600);   // hall seats always start at 600
 const hallGroup = new THREE.Group(); scene.add(hallGroup);
 const HS = { x: HALL.x, z: HALL.sz };   // stage centre
 let HOST_SEAT = -1, GUEST_SEAT = -1;
@@ -4687,7 +4694,7 @@ function makeSparks(list){
   g.setAttribute('position', new THREE.Float32BufferAttribute(p, 3)); g.setAttribute('tint', new THREE.Float32BufferAttribute(c, 3)); g.setAttribute('psize', new THREE.Float32BufferAttribute(s, 1)); g.setAttribute('phase', new THREE.Float32BufferAttribute(ph, 1));
   const pts = new THREE.Points(g, sparkMat); pts.frustumCulled = false; return pts;
 }
-{
+if (PAGE === 'hall') {
   const H = hallGroup, cx = HALL.x, cz = HALL.z, R = HALL.r, sp = [];
   { // the owner's aurora sky wrapped around the hall (mirrored so it tiles with no seam); the aurora ripples and glows, stars twinkle in front
     const skyT = new THREE.TextureLoader().load('assets/3a10b522bf07.webp'); skyT.colorSpace = THREE.SRGBColorSpace; skyT.wrapS = THREE.RepeatWrapping; skyT.anisotropy = ANISO;
@@ -4950,9 +4957,9 @@ function makeSparks(list){
   spots.forEach(([x, y, z, w, h], i) => { o.position.set(x, y, z); o.rotation.set(0, 0, 0); o.scale.setScalar(1); o.updateMatrix(); cl.setMatrixAt(i, o.matrix); const t = Math.floor(Math.random()*4); rect.set([(t % 2)*.5, t < 2 ? .5 : 0, .5, .5], i*4); size.set([w*(Math.random() < .5 ? -1 : 1), h], i*2); });
   cl.frustumCulled = false; cl.renderOrder = 2; // clouds removed at the owner's request: the hall now floats in open space
 }
-const hallLights = [[0xffe0c0, HALL.x, 9, HALL.z - 6, 70, 40], [0xc8b0ff, HALL.x, 14, HALL.z + 6, 50, 40]].map(([c, x, y, z, i, d]) => { const l = new THREE.PointLight(c, i, d, 2); l.position.set(x, y, z); hallGroup.add(l); return l; });
-const livePouches = [makePouch(HS.x + 15, 0, HS.z - 9, 'livepouch', hallGroup), makePouch(HS.x - 15, 0, HS.z - 9, 'livepouch', hallGroup)], livePouch = livePouches[0];
-const nearPouch = p => livePouches.reduce((a, b) => p.mesh.position.distanceTo(b.g.position) < p.mesh.position.distanceTo(a.g.position) ? b : a);
+const hallLights = PAGE !== 'hall' ? [] : [[0xffe0c0, HALL.x, 9, HALL.z - 6, 70, 40], [0xc8b0ff, HALL.x, 14, HALL.z + 6, 50, 40]].map(([c, x, y, z, i, d]) => { const l = new THREE.PointLight(c, i, d, 2); l.position.set(x, y, z); hallGroup.add(l); return l; });
+const livePouches = PAGE !== 'hall' ? [] : [makePouch(HS.x + 15, 0, HS.z - 9, 'livepouch', hallGroup), makePouch(HS.x - 15, 0, HS.z - 9, 'livepouch', hallGroup)], livePouch = livePouches[0];
+const nearPouch = p => !livePouches.length ? pouch : livePouches.reduce((a, b) => p.mesh.position.distanceTo(b.g.position) < p.mesh.position.distanceTo(a.g.position) ? b : a);
 
 await __yield();
 /* ---------------- LIVE: host-run broadcast in the hall ----------------
@@ -5353,7 +5360,7 @@ $('loginGo').addEventListener('click', async () => {
 });
 $('previewHost').addEventListener('click', () => { live.isHost = true; live.previewHost = true; live.state.hostPid = myId; refreshBoss(); if (me){ me.setTarget(HS.x - 3, HS.z, true); me.sitAt(HOST_SEAT); } renderLive(); toast('미리보기', ' 방장 화면이에요. 서버 없이 이 화면에서만 동작해요.'); });
 setInterval(() => { if (live.inHall && live.state.open && live.state.mode === 'cards' && live.state.cards.phase === 'open'){ renderLive(); } }, 500);
-if (window.__TL_TEST) window.__tl = { __load, get PERF(){ return PERF; }, get LP(){ return LP; }, focus(x, y, z){ camFocus.set(x, y, z); LP.t = -9; lightPoolFrame(0, 1); }, perfCull, people, renderer, camera, composer, get Q(){ return Q; }, get PAGE(){ return PAGE; }, get PRUNED(){ return PRUNED; }, WALK, AU, SEATS, cafeTables, setTreeStyle, takeItem, gotItem, enterHall, leaveHall, openLiveBok, live, net, hostNext, makeAvatar, scene, get me(){ return me; }, cam(d, p, y){ camDist = d; camPitch = p; if (y !== undefined) camYaw = y; } };
+if (window.__TL_TEST) window.__tl = { __load, SEATS, get PERF(){ return PERF; }, get LP(){ return LP; }, focus(x, y, z){ camFocus.set(x, y, z); LP.t = -9; lightPoolFrame(0, 1); }, perfCull, people, renderer, camera, composer, get Q(){ return Q; }, get PAGE(){ return PAGE; }, get PRUNED(){ return [PRUNED, PRUNE_FREED]; }, WALK, AU, SEATS, cafeTables, setTreeStyle, takeItem, gotItem, enterHall, leaveHall, openLiveBok, live, net, hostNext, makeAvatar, scene, get me(){ return me; }, cam(d, p, y){ camDist = d; camPitch = p; if (y !== undefined) camYaw = y; } };
 
 await __yield();
 /* ---------------- intro ---------------- */
@@ -5378,6 +5385,18 @@ setInterval(() => { applySeason(); updateSceneText(); }, 60e3);
 /* ---------------- page split: each page keeps only its own place ----------------
    everything is still built (so all features keep working), but what belongs to the other pages is taken out of the scene
    before the first frame, so it is never drawn, never sent to the graphics card and its lamps don't count */
+let PRUNE_FREED = 0;
+function freePruned(rm){
+  const keepT = new Set(), keepG = new Set(), dropT = new Set(), dropG = new Set();
+  const texOf = (m, S) => { for (const k in m){ const v = m[k]; if (v && v.isTexture) S.add(v.source); } if (m.uniforms) for (const k in m.uniforms){ const v = m.uniforms[k] && m.uniforms[k].value; if (v && v.isTexture) S.add(v.source); } };
+  const walk = (root, T, G) => root.traverse(o => { if (o.geometry) G.add(o.geometry); const ms = o.material ? (Array.isArray(o.material) ? o.material : [o.material]) : []; for (const m of ms) texOf(m, T); });
+  walk(scene, keepT, keepG); for (const o of rm) walk(o, dropT, dropG);
+  let freed = 0;
+  for (const src of dropT){ if (keepT.has(src)) continue; const im = src.data; if (im instanceof HTMLCanvasElement && im.width*im.height >= 512*512){ freed += im.width*im.height*4; im.width = im.height = 1; } }
+  for (const g of dropG){ if (keepG.has(g) || !g.attributes.position || g.attributes.position.count < 5000) continue;
+    for (const k in g.attributes){ const a = g.attributes[k]; if (a.isInterleavedBufferAttribute || !a.array) continue; freed += a.array.byteLength; a.array = new a.array.constructor(a.itemSize); a.count = 1; }
+    if (g.index){ freed += g.index.array.byteLength; g.index.array = new g.index.array.constructor(3); g.index.count = 3; } }
+  return Math.round(freed/1e6); }
 function prunePage(){ const rm = new Set(), W = new THREE.Vector3(), keep = new Set([marker, sun, sun.target, ground]);
   const bounds = o => { const box = new THREE.Box3(); o.updateWorldMatrix(true, true); o.traverse(c => { if (!c.geometry && !c.isSprite) return; let sp = null;
       if (c.isInstancedMesh){ if (!c.boundingSphere) c.computeBoundingSphere(); sp = c.boundingSphere; } else if (c.geometry){ if (!c.geometry.boundingSphere) c.geometry.computeBoundingSphere(); sp = c.geometry.boundingSphere; }
@@ -5403,6 +5422,9 @@ function prunePage(){ const rm = new Set(), W = new THREE.Vector3(), keep = new 
     if (PAGE === 'hall') rm.add(ground);
   }
   for (const o of rm) if (o.parent) o.parent.remove(o);
+  // give back the memory of what was taken out: large pictures and large shapes used only by removed things
+  // (small shared ones stay, so effects, held items and cats that appear later keep their looks)
+  try { PRUNE_FREED = freePruned(rm); } catch(e) { console.warn('free', e); }
   const alive = o => { for (let q = o; q; q = q.parent) if (q === scene) return true; return false; };
   for (const L of [pickables, walkables]) for (let i = L.length - 1; i >= 0; i--) if (!alive(L[i])) L.splice(i, 1);
   return rm.size;
