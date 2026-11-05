@@ -42,6 +42,7 @@ body{font-family:var(--body);font-size:15px;-webkit-tap-highlight-color:transpar
 .tag.other{padding-left:10px}
 .bub{position:absolute;left:0;top:0;transform:translate(-50%,-100%);padding:5px 11px;border-radius:12px;background:var(--glass-hi);border:1px solid var(--line);color:var(--gold);font-family:var(--display);font-size:13px;white-space:nowrap}
 .glass{background:var(--glass);border:1px solid var(--line);backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px)}
+@media (pointer:coarse){.glass{backdrop-filter:none;-webkit-backdrop-filter:none;background:rgba(22,18,38,.84)}}
 button,select{font:inherit;color:inherit}
 button{cursor:pointer}
 button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid var(--gold);outline-offset:2px}
@@ -573,9 +574,9 @@ const QUALITY = {
   phone:  { dpr: 1.25, bloom: true,  mirror: 0,   shadow: 0 }   // auto on phones: keeps the glow, drops the costly reflection and shadow passes
 };
 const prefs = Object.assign({ season: 'auto', time: 'auto', weather: 'auto', quality: 'auto' }, store.get('tl3-scene') || {});
-const qualityName = () => prefs.quality === 'auto' ? (MOBILE ? 'phone' : 'high') : prefs.quality;
+const qualityName = () => prefs.quality === 'auto' ? (MOBILE ? 'medium' : 'high') : prefs.quality;
 let Q = QUALITY[qualityName()] || QUALITY.medium;
-const ANISO = Math.min(renderer.capabilities.getMaxAnisotropy(), MOBILE ? 4 : 16);
+const ANISO = renderer.capabilities.getMaxAnisotropy();
 
 renderer.shadowMap.enabled = true; renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 renderer.toneMapping = THREE.ACESFilmicToneMapping; renderer.toneMappingExposure = 1.1;
@@ -663,7 +664,7 @@ function labelSprite(text, w = 2.8){
 await __yield();
 /* ---------------- textures (generated at high resolution) ---------------- */
 function canvasTex(size, draw, { repeat = 1, srgb = true } = {}){
-  const c = document.createElement('canvas'), px = MOBILE ? Math.min(size, 1024) : size; c.width = c.height = px; const g0 = c.getContext('2d'); if (px !== size) g0.scale(px/size, px/size); draw(g0, size); // phones: same drawing at a lighter resolution
+  const c = document.createElement('canvas'); c.width = c.height = size; draw(c.getContext('2d'), size);
   const t = new THREE.CanvasTexture(c); t.wrapS = t.wrapT = THREE.RepeatWrapping; t.repeat.set(repeat, repeat);
   t.anisotropy = ANISO; if (srgb) t.colorSpace = THREE.SRGBColorSpace; return t;
 }
@@ -2450,13 +2451,28 @@ const grade = new ShaderPass({
 composer.addPass(grade);
 composer.addPass(new OutputPass());
 
+// automatic step-down when a device can't keep up (only ever lowers, remembered for the next visit)
+const GOV = { lvl: Math.max(0, (store.get('tl3-gov') || 0) - 1), acc: 0, n: 0, last: 0, from: 0, shT: 0 };
+function applyGov(){
+  renderer.shadowMap.autoUpdate = GOV.lvl < 1; renderer.shadowMap.needsUpdate = true;
+  if (typeof grass !== 'undefined' && grass.userData.full === undefined) grass.userData.full = grass.count;
+  if (typeof grass !== 'undefined') grass.count = GOV.lvl >= 3 ? Math.floor(grass.userData.full*.45) : grass.userData.full;
+  applyQuality();
+}
+function govFrame(){ const now = performance.now(), ft = now - GOV.last; GOV.last = now;
+  if (GOV.lvl >= 1 && now - GOV.shT > 350){ GOV.shT = now; renderer.shadowMap.needsUpdate = true; }
+  if (!me || document.hidden){ GOV.from = now; GOV.acc = GOV.n = 0; return; }
+  if (ft > 1200 || now - GOV.from < 4000 || GOV.lvl >= 5) return;
+  GOV.acc += ft; GOV.n++; if (GOV.acc < 2500) return;
+  const avg = GOV.acc/GOV.n; GOV.acc = GOV.n = 0;
+  if (avg > 40){ GOV.lvl++; GOV.from = now; store.set('tl3-gov', GOV.lvl); applyGov(); } }
 function applyQuality(){
-  Q = QUALITY[qualityName()] || QUALITY.medium;
-  const dpr = Math.min(window.devicePixelRatio || 1, Q.dpr);
+  Q = QUALITY[qualityName()] || QUALITY.medium; if (GOV.lvl >= 4) Q = { ...Q, bloom: false };
+  const dpr = Math.min(window.devicePixelRatio || 1, Q.dpr, GOV.lvl >= 5 ? .8 : GOV.lvl >= 2 ? 1 : 9);
   renderer.setPixelRatio(dpr); composer.setPixelRatio(dpr);
   sun.castShadow = Q.shadow > 0;
   if (Q.shadow && sun.shadow.mapSize.x !== Q.shadow){ sun.shadow.mapSize.set(Q.shadow, Q.shadow); if (sun.shadow.map){ sun.shadow.map.dispose(); sun.shadow.map = null; } }
-  mirror.visible = pondMirror.visible = Q.mirror > 0; mirrorFallback.visible = pondFallback.visible = !mirror.visible;
+  mirror.visible = pondMirror.visible = Q.mirror > 0 && GOV.lvl < 1; mirrorFallback.visible = pondFallback.visible = !mirror.visible;
   resize();
 }
 function resize(){
@@ -2915,7 +2931,9 @@ const bossMantleParts = (() => {
     for (let i=0;i<260;i++){ const x = rnd(0, S), y = rnd(0, S), r = rnd(.6, 2.2); g.fillStyle = `rgba(255,255,255,${rnd(.5, 1)})`; g.beginPath(); g.arc(x, y, r, 0, 7); g.fill(); }
     g.strokeStyle = 'rgba(255,255,255,.9)'; g.lineWidth = 1.4; for (let i=0;i<34;i++){ const x = rnd(0, S), y = rnd(0, S), r = rnd(4, 9); g.beginPath(); g.moveTo(x - r, y); g.lineTo(x + r, y); g.moveTo(x, y - r); g.lineTo(x, y + r); g.stroke(); }
     g.fillStyle = '#f0e2b0'; g.fillRect(0, 0, S, 10); }, { srgb: true });
-  const mat = new THREE.MeshPhysicalMaterial({ map: tex, color: 0xffffff, emissive: 0xd8dcff, emissiveMap: tex, emissiveIntensity: .5, metalness: .35, roughness: .28, sheen: 1, sheenColor: new THREE.Color(0xffffff), iridescence: .5, transparent: true, opacity: .84, side: THREE.DoubleSide, depthWrite: false });
+  // phones get a plain lit material: the sheen+iridescence shader on this large see-through cloth was enough to make some mobile GPUs drop the screen
+  const mat = MOBILE ? new THREE.MeshStandardMaterial({ map: tex, color: 0xffffff, emissive: 0xd8dcff, emissiveMap: tex, emissiveIntensity: .55, metalness: .25, roughness: .35, transparent: true, opacity: .84, side: THREE.DoubleSide, depthWrite: false })
+    : new THREE.MeshPhysicalMaterial({ map: tex, color: 0xffffff, emissive: 0xd8dcff, emissiveMap: tex, emissiveIntensity: .5, metalness: .35, roughness: .28, sheen: 1, sheenColor: new THREE.Color(0xffffff), iridescence: .5, transparent: true, opacity: .84, side: THREE.DoubleSide, depthWrite: false });
   const pm = new THREE.ShaderMaterial({ uniforms: { uT: { value: 0 }, uMap: { value: null } }, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
     vertexShader: 'attribute float ph; attribute float sz; uniform float uT; varying float vA; void main(){ vec4 mv = modelViewMatrix*vec4(position, 1.); float tw = .5 + .5*sin(uT*2.6 + ph*3.); vA = .25 + .75*tw*tw; gl_PointSize = sz*(10. + 14.*tw*tw)*(6./ -mv.z); gl_Position = projectionMatrix*mv; }',
     fragmentShader: 'uniform sampler2D uMap; varying float vA; void main(){ vec2 c = gl_PointCoord - .5; float cross = max(0., 1. - abs(c.x)*14.)*max(0., 1. - abs(c.y)*2.2) + max(0., 1. - abs(c.y)*14.)*max(0., 1. - abs(c.x)*2.2); float a = texture2D(uMap, gl_PointCoord).a*.9 + cross*.8; gl_FragColor = vec4(vec3(1., .97, .9)*a*vA, a*vA); }' });
@@ -4303,6 +4321,7 @@ function auUnlock(){
     const a = AU.silent = new Audio(URL.createObjectURL(new Blob([buf], { type: 'audio/wav' }))); a.loop = true; a.setAttribute('playsinline', ''); a.volume = .01;
   }
   AU.silent.play().catch(() => {});
+  primeZoneAudio();
   if (AU.ctx && AU.ctx.state !== 'running') AU.ctx.resume().catch(() => {});
 }
 function auInit(){
@@ -4329,6 +4348,7 @@ function auInit(){
   AU.amb.water = loopNoise(AU.brown, 200, 1400, 1.2); AU.amb.water.g.connect(AU.zones.pond.out);
   AU.amb.wind = loopNoise(AU.brown, 80, 700); AU.amb.wind.g.connect(AU.zones.tree.out);
   AU.critter = { next: 0 }; AU.bird = { next: 0 };
+  primeZoneAudio();
   setInterval(auTick, 120);
   if (ctx.state !== 'running') ctx.resume().catch(() => {});
 }
@@ -4385,9 +4405,24 @@ const TRACKS = {};
 // café styles that play the owner's recordings instead of the generated patterns
 const CAFE_TRACKS = { 0: ['jazz1', 'music/jazz1.mp3', .6], 1: ['jazz2', 'music/jazz2.mp3', .6], 2: ['jazz3', 'music/jazz3.mp3', .6], 3: ['synth', 'music/synth.mp3', .55], 4: ['meditate', 'music/meditate.mp3', .6], 5: ['lofi', 'music/lofi.mp3', .6], 6: ['club1', 'music/club1.mp3', .55], 7: ['club2', 'music/club2.mp3', .55] };
 function trackBuf(key, src){ if (!TRACKS[key]) TRACKS[key] = Promise.resolve().then(() => { if (!src.startsWith('data:')) return fetch(src).then(r => { if (!r.ok) throw new Error('track'); return r.arrayBuffer(); }).then(b => AU.ctx.decodeAudioData(b)); const bin = atob(src.split(',')[1]), u = new Uint8Array(bin.length); for (let i=0;i<bin.length;i++) u[i] = bin.charCodeAt(i); return AU.ctx.decodeAudioData(u.buffer); }).catch(e => { delete TRACKS[key]; throw e; }); return TRACKS[key]; }
-function playTrack(z, key, src, vol){ if (z.trackKey === key) return; stopTrack(z); z.trackKey = key;
+// long recordings stream through one <audio> element per zone instead of being decoded whole:
+// a 3-minute track decoded is ~70 MB of memory, and a few of those make phones kill the page (black screen)
+function zoneAudio(z){ if (z.el !== undefined || !AU.ctx) return z.el || null; z.el = null;
+  try { const el = new Audio(); el.loop = true; el.preload = 'auto'; el.setAttribute('playsinline', ''); const n = AU.ctx.createMediaElementSource(el), g = AU.ctx.createGain(); g.gain.value = 0; n.connect(g); g.connect(z.dry); const wet = AU.ctx.createGain(); wet.gain.value = .12; g.connect(wet); wet.connect(AU.verb); z.el = el; z.elG = g; } catch(_) {}
+  return z.el; }
+function primeZoneAudio(){ if (!AU.ctx || !AU.silent || CAFE_TRACKS[0][1].startsWith('data:')) return; for (const z of Object.values(AU.zones)){ const el = zoneAudio(z); if (!el || el.dataset.primed) continue; el.dataset.primed = '1'; if (!el.src) el.src = AU.silent.src; const pr = el.play(); if (pr && pr.catch) pr.catch(() => { delete el.dataset.primed; }); setTimeout(() => { if (!z.trackKey) el.pause(); }, 60); } }
+function playTrack(z, key, src, vol){ if (z.trackKey === key) return;
+  if (!src.startsWith('data:')){ if (z.failAt && performance.now() - z.failAt < 6000) return; const el = zoneAudio(z); if (el){
+    z.trackKey = key; const tok = z.tok = (z.tok || 0) + 1, g = z.elG.gain, t = AU.ctx.currentTime, wasOn = g.value > .001; g.cancelScheduledValues(t); g.setValueAtTime(g.value, t); g.linearRampToValueAtTime(0, t + .35);
+    setTimeout(() => { if (z.tok !== tok) return; if (!el.src.endsWith(src)) el.src = src; try { el.currentTime = 0; } catch(_) {}
+      const up = () => { if (z.tok !== tok) return; const t2 = AU.ctx.currentTime; g.cancelScheduledValues(t2); g.setValueAtTime(0, t2); g.linearRampToValueAtTime(vol, t2 + 1.5); };
+      const pr = el.play(); if (pr && pr.then) pr.then(up, () => { if (z.tok === tok){ z.trackKey = null; z.failAt = performance.now(); } }); else up(); }, wasOn ? 400 : 0);
+    return; } }
+  stopTrack(z); z.trackKey = key;
   trackBuf(key, src).then(buf => { if (z.trackKey !== key || z.src) return; const s = AU.ctx.createBufferSource(); s.buffer = buf; s.loop = true; const g = AU.ctx.createGain(); g.gain.setValueAtTime(0, AU.ctx.currentTime); g.gain.linearRampToValueAtTime(vol, AU.ctx.currentTime + 1.5); s.connect(g); g.connect(z.dry); const wet = AU.ctx.createGain(); wet.gain.value = .12; g.connect(wet); wet.connect(AU.verb); s.start(); z.src = s; z.srcG = g; }).catch(() => { if (z.trackKey === key) z.trackKey = null; }); }
-function stopTrack(z){ if (!z.trackKey) return false; z.trackKey = null; if (z.src){ const s = z.src, g = z.srcG, t = AU.ctx.currentTime; g.gain.cancelScheduledValues(t); g.gain.setValueAtTime(g.gain.value, t); g.gain.linearRampToValueAtTime(0, t + 1.2); setTimeout(() => { try { s.stop(); } catch (e) {} s.disconnect(); }, 1400); z.src = null; } return true; }
+function stopTrack(z){ if (!z.trackKey) return false; z.trackKey = null;
+  if (z.el && z.elG){ const tok = z.tok = (z.tok || 0) + 1, g = z.elG.gain, t = AU.ctx.currentTime; g.cancelScheduledValues(t); g.setValueAtTime(g.value, t); g.linearRampToValueAtTime(0, t + 1.2); setTimeout(() => { if (z.tok === tok) z.el.pause(); }, 1400); }
+  if (z.src){ const s = z.src, g = z.srcG, t = AU.ctx.currentTime; g.gain.cancelScheduledValues(t); g.gain.setValueAtTime(g.gain.value, t); g.gain.linearRampToValueAtTime(0, t + 1.2); setTimeout(() => { try { s.stop(); } catch (e) {} s.disconnect(); }, 1400); z.src = null; } return true; }
 const CAFE_STYLES = [
   // 0 jazz: walking bass, brushes, ride, comping chords, vibraphone fills
   (z, s, at0) => { const beat = 60/108; z.dt = beat/2; const prog = [[53, [57, 60, 64, 67]], [50, [53, 57, 60, 64]], [55, [58, 62, 65, 69]], [48, [52, 55, 58, 62]], [57, [60, 64, 67, 71]], [50, [54, 57, 60, 64]], [55, [58, 62, 65, 68]], [48, [52, 55, 58, 63]]];
@@ -5232,7 +5267,7 @@ $('loginGo').addEventListener('click', async () => {
 });
 $('previewHost').addEventListener('click', () => { live.isHost = true; live.previewHost = true; live.state.hostPid = myId; refreshBoss(); if (me){ me.setTarget(HS.x - 3, HS.z, true); me.sitAt(HOST_SEAT); } renderLive(); toast('미리보기', ' 방장 화면이에요. 서버 없이 이 화면에서만 동작해요.'); });
 setInterval(() => { if (live.inHall && live.state.open && live.state.mode === 'cards' && live.state.cards.phase === 'open'){ renderLive(); } }, 500);
-if (window.__TL_TEST) window.__tl = { people, AU, SEATS, cafeTables, setTreeStyle, takeItem, gotItem, enterHall, leaveHall, openLiveBok, live, net, hostNext, makeAvatar, scene, get me(){ return me; }, cam(d, p, y){ camDist = d; camPitch = p; if (y !== undefined) camYaw = y; } };
+if (window.__TL_TEST) window.__tl = { renderer, camera, composer, GOV, applyGov, get Q(){ return Q; }, people, AU, SEATS, cafeTables, setTreeStyle, takeItem, gotItem, enterHall, leaveHall, openLiveBok, live, net, hostNext, makeAvatar, scene, get me(){ return me; }, cam(d, p, y){ camDist = d; camPitch = p; if (y !== undefined) camYaw = y; } };
 
 await __yield();
 /* ---------------- intro ---------------- */
@@ -5249,7 +5284,7 @@ $('ownerTry').hidden = !!CONFIG.SUPABASE_URL;
 if (!CONFIG.SUPABASE_URL) $('introNote').textContent = '지금은 혼자 둘러보는 미리보기예요. 서버를 연결하면 링크로 들어온 사람들이 함께 보여요.';
 
 /* ---------------- loop ---------------- */
-applyQuality(); applySeason(); updateSceneText(); fetchWeather();
+applyGov(); applySeason(); updateSceneText(); fetchWeather();
 setInterval(fetchWeather, CONFIG.WEATHER_EVERY_MIN*60e3);
 setInterval(() => { applySeason(); updateSceneText(); }, 60e3);
 
@@ -5257,7 +5292,7 @@ const clock = new THREE.Clock();
 const v3 = new THREE.Vector3();
 let introT = 0;
 function frame(){
-  const dt = Math.min(clock.getDelta(), .05), t = clock.elapsedTime;
+  const dt = Math.min(clock.getDelta(), .1), t = clock.elapsedTime; govFrame();
   for (const p of people.values()) p.update(dt, t);
   orbit.rotation.y = t*.12;
   for (const c of orbit.children) c.position.y = Math.sin(t*.9 + c.userData.phase)*.18;
@@ -5298,7 +5333,7 @@ function frame(){
   requestAnimationFrame(frame);
 }
 requestAnimationFrame(frame);
-(async () => { try { await Promise.race([renderer.compileAsync(scene, camera), new Promise(r => setTimeout(r, 7000))]); } catch (e) {}
+(async () => { await new Promise(r => setTimeout(r, 50));
   const b = $('goBtn'); b.dataset.ready = '1'; b.disabled = false; b.querySelector('span').textContent = '들어가기'; const bar = $('loadBar'); if (bar){ bar.style.width = '100%'; setTimeout(() => bar.parentNode.hidden = true, 400); } })();
 </script>
 </body>
