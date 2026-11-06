@@ -678,7 +678,11 @@ function labelSprite(text, w = 2.8){
 await __yield();
 /* ---------------- textures (generated at high resolution) ---------------- */
 function canvasTex(size, draw, { repeat = 1, srgb = true } = {}){
-  const c = document.createElement('canvas'), px = MOBILE ? Math.min(size, 1024) : size; c.width = c.height = px; const g0 = c.getContext('2d'); if (px !== size) g0.scale(px/size, px/size); draw(g0, size); // phones: same drawing at a lighter resolution
+  const c = document.createElement('canvas'), px = MOBILE ? Math.min(size, 768) : size; c.width = c.height = px; const g0 = c.getContext('2d'); if (px !== size) g0.scale(px/size, px/size); // phones: same drawing at a lighter resolution
+  // iPhones cap the total memory of all canvases on a page; scratch canvases used while drawing are emptied right away
+  const made = [], ce = document.createElement; document.createElement = function(t, o){ const e = ce.call(document, t, o); if (String(t).toLowerCase() === 'canvas') made.push(e); return e; };
+  try { draw(g0, size); } finally { document.createElement = ce; }
+  for (const e of made) if (e !== c){ e.width = 0; e.height = 0; }
   const t = new THREE.CanvasTexture(c); t.wrapS = t.wrapT = THREE.RepeatWrapping; t.repeat.set(repeat, repeat);
   t.anisotropy = ANISO; if (srgb) t.colorSpace = THREE.SRGBColorSpace; return t;
 }
@@ -4093,8 +4097,8 @@ function tap(cx, cy){
   if (!hw) return;
   let { x, z } = hw.point;
   if (live.inHall){ const dx = x - HALL.x, dz = z - HALL.z, d = Math.hypot(dx, dz), m = HALL.r - 2.5; if (d > m){ x = HALL.x + dx/d*m; z = HALL.z + dz/d*m; } }
-  if (stageClosed()){ const dx = x - HALL.x, dz = z - HALL.sz, d = Math.hypot(dx, dz); if (d < STAGE_R){ const k = STAGE_R/(d || 1); x = HALL.x + (d ? dx*k : 0); z = HALL.sz + (d ? dz*k : -STAGE_R); toast('', '상담 중에는 무대에 올라갈 수 없어요.'); } }
   else if (!inCafe(x, z)){ const d = Math.hypot(x, z); if (d > WORLD_R){ x *= WORLD_R/d; z *= WORLD_R/d; } }
+  if (stageClosed()){ const dx = x - HALL.x, dz = z - HALL.sz, d = Math.hypot(dx, dz); if (d < STAGE_R){ const k = STAGE_R/(d || 1); x = HALL.x + (d ? dx*k : 0); z = HALL.sz + (d ? dz*k : -STAGE_R); toast('', '상담 중에는 무대에 올라갈 수 없어요.'); } }
   if (!live.inHall && !(me && me.fly) && !WALK.ok(x, z)) [x, z] = WALK.nearest(x, z);
   pendingThrow = null; pendingSit = null; me.setTarget(x, z); marker.position.set(x, heightAt(x, z) + .07, z); marker.material.opacity = 1;
   hideHint(); net.send('move', { x: +x.toFixed(2), z: +z.toFixed(2) });
@@ -4118,6 +4122,8 @@ $('bokGo').addEventListener('click', () => {
 });
 function goSit(i){
   const S = SEATS[i]; if (!S || !me) return;
+  if (i === HOST_SEAT && !live.isHost){ toast('', '방장님 자리예요.'); return; }
+  if (i === GUEST_SEAT && live.state.open && live.state.mode === 'consult' && !(live.state.seated && live.state.seated.id === myUid())){ toast('', '상담 받는 분의 자리예요.'); return; }
   if ([...people.values()].some(p => p !== me && p.seat === i)){ toast('', '이미 다른 분이 앉아 있어요. 다른 자리를 골라 주세요.'); return; }
   if (i === HOST_SEAT || i === GUEST_SEAT){ toast('라이브', i === HOST_SEAT ? ' 방장님 자리예요.' : ' 상담 차례가 된 분이 앉는 자리예요. 복채 넣기로 신청해 주세요.'); return; } hideHint(); pendingThrow = null;
   if (Math.hypot(me.mesh.position.x - S.x, me.mesh.position.z - S.z) < 2.5){ me.sitAt(i); net.send('sit', { seat: i }); net.retrack(); return; }
@@ -5373,6 +5379,7 @@ $('introForm').addEventListener('submit', e => {
   $('intro').hidden = true; $('emotes').hidden = false; $('hint').hidden = false; canvas.focus();
   setHud(); startNet(); if (AU.on) auInit(); updateSoundBtn();
   if (PAGE === 'hall') enterHall();
+  if (AU.on && (PAGE !== 'garden' || ARRIVE.from || ARRIVE.place != null)) setTimeout(() => { if (!AU.ctx || AU.ctx.state !== 'running') toast('소리', ' 화면을 한 번 누르면 음악이 나와요.'); }, 1200);
 });
 $('ownerTry').hidden = !!CONFIG.SUPABASE_URL;
 if (!CONFIG.SUPABASE_URL) $('introNote').textContent = '지금은 혼자 둘러보는 미리보기예요. 서버를 연결하면 링크로 들어온 사람들이 함께 보여요.';
